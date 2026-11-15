@@ -1,0 +1,34 @@
+[package]
+name = "chrome2rust-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unified high-performance Chrome cache inspection and User Data forensic workstation CLI in 100% pure Rust"
+
+[[bin]]
+name = "chrome2rust"
+path = "src/main.rs"
+
+[dependencies]
+chrome2rust-core.workspace = true
+chrome2rust-cache.workspace = true
+chrome2rust-forensics.workspace = true
+chrome2rust-report.workspace = true
+chrome2rust-mcp.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ctrlc.workspace = true
+rfd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rusqlite.workspace = true
+flate2.workspace = true
+crc32fast.workspace = true
+sha2.workspace = true

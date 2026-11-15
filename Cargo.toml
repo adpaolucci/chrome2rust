@@ -2,18 +2,29 @@
 resolver = "2"
 members = [
     "crates/chrome2rust-core",
-    "crates/chrome2rust",
+    "crates/chrome2rust-cache",
+    "crates/chrome2rust-forensics",
+    "crates/chrome2rust-report",
+    "crates/chrome2rust-mcp",
+    "crates/chrome2rust-cli",
+    "crates/chrome2rust-gui",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/adpaolucci/chrome2rust"
-authors = ["adpaolucci"]
-description = "All-in-one Chrome cache viewer (ChromeCacheView clone) and Google Chrome User Data forensic analysis suite"
+authors = ["Chrome2Rust Contributors"]
+description = "Blazing-fast, memory-safe Google Chrome cache inspection and User Data forensic workstation in 100% pure Rust"
 
 [workspace.dependencies]
+chrome2rust-core = { path = "crates/chrome2rust-core" }
+chrome2rust-cache = { path = "crates/chrome2rust-cache" }
+chrome2rust-forensics = { path = "crates/chrome2rust-forensics" }
+chrome2rust-report = { path = "crates/chrome2rust-report" }
+chrome2rust-mcp = { path = "crates/chrome2rust-mcp" }
+
 anyhow = "1.0"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -41,7 +52,26 @@ dirs = "7.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 tempfile = "3.20"
 clap = { version = "4.6", features = ["derive"] }
-eframe = "0.33"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ctrlc = "3.4"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 egui_extras = { version = "0.33", features = ["all_loaders"] }
 rfd = "0.17"
 arboard = "3.6"
+
+[profile.dev.package.clap]
+opt-level = 2
+
+[profile.dev.package.clap_builder]
+opt-level = 2
+
+[profile.dev.package.clap_derive]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -162,7 +162,7 @@ fn derive_pbkdf2_key(passphrase: &[u8], iterations: u32) -> [u8; 16] {
 }
 
 fn try_aes_128_cbc_chrome(ciphertext: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    if key.len() != 16 || ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if key.len() != 16 || ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return None;
     }
     let iv = [0x20u8; 16];
@@ -182,11 +182,7 @@ fn try_aes_256_gcm_chrome(payload: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     cipher.decrypt(nonce, &payload[12..]).ok()
 }
 
-fn extract_utf8_plaintext(
-    pt: &[u8],
-    domain_hint: Option<&str>,
-    db_version: Option<i64>,
-) -> Option<String> {
+fn extract_utf8_plaintext(pt: &[u8], domain_hint: Option<&str>, db_version: Option<i64>) -> Option<String> {
     // Chrome DB meta.version >= 24 prepends SHA256(host_key) (32 bytes) to cookie values
     let has_v24_hash = db_version.is_some_and(|v| v >= 24) && pt.len() >= 32;
     if has_v24_hash {
@@ -203,10 +199,11 @@ fn extract_utf8_plaintext(
             return Some(tail.to_string());
         }
     }
-    if let Ok(s) = std::str::from_utf8(pt) {
-        if s.chars().all(|c| !c.is_control() || c == '\t' || c == '\n' || c == '\r') {
-            return Some(s.to_string());
-        }
+    if let Ok(s) = std::str::from_utf8(pt)
+        && s.chars()
+            .all(|c| !c.is_control() || c == '\t' || c == '\n' || c == '\r')
+    {
+        return Some(s.to_string());
     }
     // Fallback check for 32-byte domain hash when db_version wasn't passed
     if pt.len() > 32
@@ -257,13 +254,8 @@ mod tests {
         let mut blob = b"v10".to_vec();
         blob.extend_from_slice(ct);
 
-        let (scheme, dec) = try_decrypt_chrome_blob(
-            &blob,
-            "",
-            Some("127.0.0.1"),
-            Some(24),
-            &CryptoOptions::best_effort(),
-        );
+        let (scheme, dec) =
+            try_decrypt_chrome_blob(&blob, "", Some("127.0.0.1"), Some(24), &CryptoOptions::best_effort());
         assert_eq!(scheme, EncryptionScheme::V10);
         assert_eq!(dec.as_deref(), Some("abc123"));
     }

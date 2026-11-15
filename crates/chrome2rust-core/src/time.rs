@@ -14,7 +14,7 @@ pub fn chrome_us_to_datetime(us: i64) -> Option<DateTime<Utc>> {
     }
     let unix_us = us.checked_sub(CHROME_EPOCH_OFFSET_US)?;
     // Reject dates earlier than 1971-01-01 or later than 2200-01-01 as invalid/sentinel
-    if unix_us < 31_536_000_000_000 || unix_us > 7_258_118_400_000_000 {
+    if !(31_536_000_000_000..=7_258_118_400_000_000).contains(&unix_us) {
         return None;
     }
     DateTime::from_timestamp_micros(unix_us)

@@ -1,99 +1,227 @@
-# chrome2rust
+# `chrome2rust` — High-Fidelity Google Chrome Cache Inspector & User Data Forensic Suite in Pure Rust
 
-A fast, read-only, cross-platform Rust workstation and CLI suite combining full **NirSoft ChromeCacheView** parity with a comprehensive **Google Chrome / Chromium User Data forensic analyzer and offline report generator**.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust: 1.85+](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](Cargo.toml)
+[![Forensics: Read-Only](https://img.shields.io/badge/Forensics-Read--Only%20Snapshots-success.svg)](crates/chrome2rust-forensics)
+[![Architecture: 7 Crates](https://img.shields.io/badge/Workspace-7%20Crates-emerald.svg)](Cargo.toml)
 
----
-
-## Features
-
-### 1. ChromeCacheView Parity (Simple Cache & Blockfile Cache)
-- **Dual-Backend Cache Parsing**:
-  - **Simple Cache** (`*_0`, `*_1` index entries) with CRC-32 verification and Key SHA-256 verification (tested against Chromium through v156+).
-  - **Blockfile Cache** (`index`, `data_0`..`data_N`, `f_xxxxxx` separate files, deleted separate-file detection, and `RankingsNode` last-used timestamps).
-- **Modern Partitioned Cache Keys**: Parses Chrome double-key / network isolation keys (`_dk_<site> <frame> <url>`) cleanly into `URL`, `Web Site`, and `Frame` columns.
-- **Full `HttpResponseInfo` Pickle Decoding**: Decodes Chrome 2.x–156+ pickles (`extra_flags`, request/response/original timestamps, raw HTTP headers, TLS version, ALPN protocol, socket IP:port, DNS aliases, and embedded X.509 certificate chains).
-- **Transparent Decompression**: Automatically decompresses `gzip`, `deflate`, `br` (Brotli), and `zstd` payloads on read, preview, SHA-256 hashing, and extraction.
-- **Extraction & Export**:
-  - Extract matching entries with `--filename-mode url|cache-name|cache-name-ext`, `--website-dirs` host/path directory reconstruction, preserved `Last Accessed` / `Server Time` modification timestamps, automatic collision renaming, and selective raw vs. decompressed output.
-  - Export tables in **CSV**, **TSV (`tab`)**, **Tabular text**, **Plain Text**, **Horizontal HTML**, **Vertical HTML**, **XML**, and **JSON**.
-  - Safely delete standalone `*_0` or `f_xxxxxx` files (with dry-run preview by default and `--yes` confirmation).
-
-### 2. Google Chrome `User Data` Forensic Analysis
-All SQLite artifacts (`History`, `Cookies`, `Login Data`, `Web Data`, `Top Sites`, `Favicons`, `Shortcuts`, `Reporting and NEL`, `ServerCertificate`) are analyzed using **forensically safe temporary snapshots** (copying `-wal`, `-shm`, and `-journal` sidecars) so locked live browser profiles can be read without mutating evidence.
-
-- **`Local State` & `Last Version`**: Chrome version, `os_crypt` key presence/prefix/portal metadata, `last_active_profiles`, enterprise policies, and profile directory metadata.
-- **Browsing History & Downloads (`History`)**: URLs, typed counts, hidden flags, visit chains with decoded `PageTransition` core types & qualifiers, download states/danger flags & full URL redirect chains, omnibox `keyword_search_terms`, plus **`sqlite_sequence` deletion-gap indicators**.
-- **Cookies & Saved Credentials (`Network/Cookies`, `Login Data`)**:
-  - Read-only structural & encryption scheme classification (`plaintext`, `v10`, `v11`, `v20` App-Bound, `dpapi`) by default.
-  - **Optional best-effort decryption** (`--decrypt` / GUI settings) supporting supplied passphrases (`PBKDF2-HMAC-SHA1`), hex-encoded 16/32-byte AES keys, Linux `"peanuts"` fallback, and Chrome DB v24+ 32-byte SHA-256 host-hash prefix stripping.
-  - Flags compromised/leaked/weak/reused passwords from `insecure_credentials`.
-- **Autofill, Addresses, Cards & Search Engines (`Web Data`)**: Form autofill history, legacy `autofill_profiles` and modern `local_addresses`/`contact_info` tokens, payment card metadata, and custom search engines.
-- **Extensions & Bookmarks (`Preferences`, `Secure Preferences`, `Extensions/`, `Bookmarks`)**: Installed extensions with Web Store verification, install timestamps, permission inventories, and risk flags (`UNPACKED`/`COMMAND_LINE` sideloading, `debugger`, `nativeMessaging`, `cookies`, `webRequest`, `<all_urls>`), plus recursive bookmark extraction.
-- **SNSS Session Replay (`Sessions/Session_*`, `Sessions/Tabs_*`, legacy `Current/Last Session/Tabs`)**: Reconstructs open and recently closed tabs along with Back/Forward navigation stacks and detects `Sessions_Encrypted`.
-- **Site Storage & Network State**: Pure-Rust read-only **LevelDB** reader (`.ldb` SSTables w/ Snappy/zstd blocks + `.log` WAL replay) for `Local Storage/leveldb` and `Session Storage`, `IndexedDB` origin inventory, `Top Sites`, `Shortcuts`, `Reporting and NEL`, and `Network Persistent State`.
-- **Forensic Intelligence & Unified Timeline**:
-  - Cross-correlates compromised credentials, dangerous downloads, sideloaded/over-privileged extensions, SQLite history sequence gaps, **cached HTML pages missing from History**, and deleted blockfile payloads.
-  - Builds a unified chronological timeline across all artifact sources.
-
-### 3. Unified Delivery: Desktop GUI + Modern CLI + Offline HTML/JSON/Markdown Reports
-- **Native Desktop GUI (`egui` / `eframe`)**: ChromeCacheView workflow (`F8` docked Image/Text/Hex/Header preview pane, `F4` extract dialog, `Ctrl+Q` quick filter, Shift-click multi-column sorting, Properties dialog, Column chooser) paired with multi-tab forensic exploration and 1-click report export.
-- **Interactive Self-Contained HTML Reports**: Zero external dependencies (works offline in air-gapped environments) featuring profile filtering, global search, inline SVG charts, sortable paginated tables, Dark/Light theme toggle, CSV export, and entry inspection modals.
+**`chrome2rust`** is an ultra-fast, memory-safe, read-only cross-platform Chromium-family cache inspection and `User Data` forensic workstation written in **100% pure Rust**. It parses both **Simple Cache** and legacy **Blockfile Cache** backends alongside every major Chromium profile database (**History**, **Downloads**, **Cookies**, **Login Data**, **Web Data**, **Preferences**, **Extensions**, **Bookmarks**, **SNSS Sessions/Tabs**, **LevelDB Local/Session Storage**, and **IndexedDB**), producing unified chronological timelines, cross-artifact intelligence findings, SHA-256 chain-of-custody Merkle manifests, and air-gapped HTML/JSON/Markdown forensic report bundles.
 
 ---
 
-## Building
+## Key Capabilities
 
-### Full Desktop GUI + CLI
-Requires standard X11/Wayland/OpenGL development libraries on Linux (e.g., `libgtk-3-dev`, `libgl-dev`, `libxkbcommon-dev`).
+| Capability | Details |
+| :--- | :--- |
+| **Dual-Backend HTTP Cache Engine** | Pure-Rust parsers for modern **Simple Cache** (`*_0` / `*_1` with CRC-32 & Key SHA-256 verification) and **Blockfile Cache** (`index`, `data_0`..`data_N`, `f_xxxxxx`, `RankingsNode` timestamps), tested against Chromium through v156+ |
+| **`HttpResponseInfo` Pickle Decoder** | Extracts raw HTTP headers, `request_time`/`response_time`, network isolation partition keys (`URL`, `Web Site`, `Frame`), server socket IP:port, TLS version, ALPN protocol, DNS aliases, and X.509 certificate chains |
+| **Transparent Payload Decompression** | Automatically decompresses `gzip`, `deflate`, `br` (Brotli), and `zstd` cached streams on preview, SHA-256 hashing, and disk extraction |
+| **Safe Read-Only Evidence Handling** | Snapshots locked SQLite stores together with `-wal`, `-shm`, and `-journal` sidecars before reading so live browser profiles are never mutated |
+| **User Data Deep Forensics** | Analyzes `Local State`, `History` + `sqlite_sequence` deletion gaps, `Cookies`, `Login Data` + `insecure_credentials`, `Web Data`, `Preferences`, `Extensions` risk scoring, `Bookmarks`, SNSS `Sessions`/`Tabs`, pure-Rust `LevelDB` storage, and `IndexedDB` |
+| **Optional Best-Effort Decryption** | Supports `v10`/`v11` decryption using user-supplied passphrases (`PBKDF2-HMAC-SHA1`), hex AES-128/256 keys, Linux `"peanuts"` fallback, and Chromium DB v24+ 32-byte domain hash stripping |
+| **Chain-of-Custody Merkle Audits** | Computes deterministic per-artifact SHA-256 digests and balanced binary RFC 6234 Merkle roots exported as CSV or JSON (`--audit-manifest` / `chrome2rust custody`) |
+| **Air-Gapped Forensic Reports** | Self-contained HTML (zero external CDN requests, interactive dark/light theme, SVG charts, sortable tables), JSON, and Markdown bundles |
+| **Model Context Protocol (MCP)** | Built-in JSON-RPC 2.0 `stdio` MCP server (`chrome2rust mcp` & `chrome2rust-mcp`) exposing structured profile discovery, cache inspection, forensic analysis, reporting, and custody tools to AI agents |
+| **Native Pure-Rust Desktop GUI** | Classic Win32/MMC administrative management console (`chrome2rust-gui`) with zero WebView, Electron, or Node.js dependencies |
 
-```bash
-cargo build --release
+---
+
+## Pre-Compiled Binaries & Direct Download
+
+Self-contained native executables with **zero external runtime dependencies** are built for every release across Windows, Linux, and macOS:
+
+| Platform | Target Architecture | Distribution Package | Included Binaries |
+| :--- | :--- | :--- | :--- |
+| **Windows (64-bit)** | `x86_64-pc-windows-msvc` | [**`chrome2rust-x86_64-pc-windows-msvc.zip`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-pc-windows-msvc.zip) | `chrome2rust.exe`, `chrome2rust-gui.exe`, `chrome2rust-mcp.exe` |
+| **Linux (64-bit)** | `x86_64-unknown-linux-gnu` | [**`chrome2rust-x86_64-unknown-linux-gnu.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-unknown-linux-gnu.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
+| **macOS Apple Silicon** | `aarch64-apple-darwin` (M1–M4) | [**`chrome2rust-aarch64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-aarch64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
+| **macOS Intel** | `x86_64-apple-darwin` | [**`chrome2rust-x86_64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
+
+> Every release archive includes cryptographic `SHA256SUMS.txt` checksums alongside `chrome2rust` (CLI), `chrome2rust-gui` (Win32/MMC Desktop Console), and `chrome2rust-mcp` (MCP server).
+
+---
+
+## Workspace Architecture
+
+```text
+chrome2rust/
+├── Cargo.toml                         # Workspace root manifest (7 modular crates)
+├── mcp.json                           # Standard MCP server client configuration
+├── crates/
+│   ├── chrome2rust-core/              # Foundation: discovery, format sniffer, crypto, WAL-safe SQLite snapshots, time, tracing logging
+│   ├── chrome2rust-cache/             # Simple Cache (*_0/*_1) & Blockfile (data_0..3, f_*) parsers, HttpResponseInfo pickles, codecs, 8-format exporter
+│   ├── chrome2rust-forensics/         # History, Cookies, Logins, Web Data, Extensions, SNSS Sessions, pure-Rust LevelDB, timeline, findings, Merkle custody
+│   ├── chrome2rust-report/            # Self-contained offline HTML, JSON, and Markdown forensic report generators + end-to-end integration tests
+│   ├── chrome2rust-mcp/               # Model Context Protocol (MCP) JSON-RPC 2.0 stdio server & standalone `chrome2rust-mcp` binary
+│   ├── chrome2rust-cli/               # Unified CLI engine (`chrome2rust`): profiles, sniff, cache, analyze, report, custody, pick, gui, mcp
+│   └── chrome2rust-gui/               # Native Classic Win32/MMC desktop forensic workstation (`chrome2rust-gui`)
+└── .github/workflows/                 # Cross-platform CI (`fmt`, `clippy`, `test`, `release`) and GitHub Release packaging
 ```
 
-### Headless CLI Only (No GUI Dependencies)
+---
+
+## Supported Artifacts & Formats
+
+### Browser & Profile Auto-Discovery
+Automatically locates installed profiles across **Google Chrome**, **Chromium**, **Microsoft Edge**, **Brave**, **Opera**, and **Vivaldi** on Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`~/.config` & `~/.cache`).
+
+### HTTP Cache Inspection & Extraction
+- **Simple Cache**: `*_0` entry streams (Stream 0 EOF HTTP metadata + key SHA-256 + CRC-32; Stream 1 raw or `*_1` separate payload files).
+- **Blockfile Cache**: `index` hash tables, `data_0`..`data_3` external ranking/block stores, standalone `f_xxxxxx` payload files, and deleted-entry recovery.
+- **8 Structured Export Formats**: `table`, `csv`, `tsv`, `text`, `html` (horizontal table), `vhtml` (vertical record cards), `xml`, and `json`.
+- **Payload Extraction**: Preserves `Last Accessed` / `Server Time` modification timestamps, supports URL / CacheName / CacheName+Ext naming, mirrors website `host/path` directories (`--website-dirs`), and handles collision-safe renaming.
+
+### Chrome `User Data` Forensic Suite
+- **`Local State` & `Last Version`**: Installed version, OS Crypt key metadata (`os_crypt.encrypted_key`, portal telemetry), active profiles, and enterprise policies.
+- **`History` & `Downloads`**: URLs, typed/visit counts, decoded `PageTransition` chains, download state/danger classification & full URL redirect chains, omnibox `keyword_search_terms`, and `sqlite_sequence` deletion-gap estimation.
+- **`Cookies` & `Login Data`**: Encryption scheme breakdown (`plaintext`, `v10`, `v11`, `v20` App-Bound, `dpapi`), optional best-effort decryption, and `insecure_credentials` flagging.
+- **`Web Data`, `Preferences`, `Bookmarks`, `Extensions`**: Autofill history, addresses, card metadata, hierarchical bookmarks, permission extraction, and sideloaded/over-privileged extension risk flags.
+- **`Sessions` & Site Storage**: SNSS (`Session_*` / `Tabs_*`) open & closed tab navigation stacks, pure-Rust `LevelDB` `.ldb` (Snappy/Zstd) + `.log` WAL replay for `Local Storage` and `Session Storage`, `IndexedDB` origin inventory, `Top Sites`, and `Reporting and NEL`.
+
+---
+
+## Quick Start & Compilation
+
+### Prerequisites
+- [Rust toolchain](https://rustup.rs/) (1.85 or newer / edition 2024).
+- On Linux desktop builds of `chrome2rust-gui`: standard X11/Wayland/OpenGL development packages (`libssl-dev`, `libgtk-3-dev`, `libx11-dev`, `libgl1-mesa-dev`, `libwayland-dev`, `libxkbcommon-dev`).
+
+### Build Release Binaries
 ```bash
-cargo build --release -p chrome2rust --no-default-features
+# Clone the repository
+git clone https://github.com/adpaolucci/chrome2rust.git
+cd chrome2rust
+
+# Run all workspace unit and integration tests
+cargo test --workspace
+
+# Build optimized release binaries (`chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp`)
+cargo build --workspace --release
+```
+
+### Build Headless / CLI-Only (Zero GUI Libraries Required)
+```bash
+cargo build --release -p chrome2rust-cli -p chrome2rust-mcp
+```
+
+### Launch Native Desktop Console
+```bash
+# Via CLI launcher:
+chrome2rust gui
+
+# Or pre-load a target directory directly:
+chrome2rust-gui "/path/to/Chrome/User Data"
 ```
 
 ---
 
-## CLI Usage
+## CLI Usage Guide
 
-Run with no arguments (or `chrome2rust gui`) to launch the desktop GUI, or use any subcommand:
-
+### 1. Discover Local Browser Profiles & Sniff Artifacts
 ```bash
-# Discover local Chrome / Chromium / Edge / Brave / Opera / Vivaldi profiles
+# List discovered Chromium profiles and cache folders
 chrome2rust profiles
 chrome2rust profiles --json
 
-# Launch GUI pre-loaded with a target directory
-chrome2rust gui "/path/to/Chrome/User Data"
+# Identify file magic headers or Chrome directory layout
+chrome2rust sniff "/path/to/Cache_Data/45b032600bc6b3f3_0"
+chrome2rust sniff "/path/to/User Data" --json
+```
 
-# List cache entries (auto-discovers local browser cache if PATH is omitted)
+### 2. Inspect, Filter, Extract & Export HTTP Cache Entries
+```bash
+# List cache entries (auto-discovers local browser cache if PATH is omitted, or pass --pick)
 chrome2rust cache list "/path/to/Cache_Data" --format table --sort last-accessed --desc
-chrome2rust cache list "/path/to/Profile" --content-type "image/" --last 7d --format csv -o images.csv
+chrome2rust cache list "/path/to/Profile" --content-type "image/" --last 7d -f csv -o images.csv
 chrome2rust cache list "/path/to/Cache_Data" --filter "api" --hashes --columns url,content-type,size,sha256
 
-# Extract cached files cleanly (reconstructing website host/path directories)
+# Extract decompressed cached payloads reconstructing host/path directory structure
 chrome2rust cache extract "/path/to/Cache_Data" -o ./extracted --website-dirs --filename-mode url
-chrome2rust cache extract "/path/to/Cache_Data" --content-type "text/html" -o ./html_dump
 
-# Deep inspection of a single cache entry (headers, TLS/ALPN, X.509 certs, SHA-256, payload preview)
+# Deep-inspect headers, TLS/ALPN metadata, X.509 cert chains, and payload preview
 chrome2rust cache inspect "/path/to/Cache_Data/45b032600bc6b3f3_0" --preview
 chrome2rust cache inspect "/path/to/Cache_Data" --url "example.com" --dump-body ./body.bin
 
-# Safe standalone cache deletion (dry-run by default; pass --yes to delete)
+# Safe standalone cache file deletion (dry-run by default; pass --yes to commit)
 chrome2rust cache delete "/path/to/Cache_Data" --url "ads"
 chrome2rust cache delete "/path/to/Cache_Data" --url "ads" --yes
+```
 
-# Full User Data forensic analysis
+### 3. Full User Data Forensic Analysis & Offline Reports
+```bash
+# Terminal summary + forensic findings + top domains
 chrome2rust analyze "/path/to/User Data"
-chrome2rust analyze "/path/to/User Data" --decrypt --key "my_passphrase_or_hex_key" --json > analysis.json
 
-# Generate standalone forensic reports (html, json, markdown, or all)
+# Structured JSON output with optional best-effort decryption and chain-of-custody CSV
+chrome2rust analyze "/path/to/User Data" --decrypt --key "passphrase_or_hex" --json \
+  --audit-manifest ./custody_manifest.csv > analysis.json
+
+# Generate standalone HTML, JSON, Markdown, or full report bundle
 chrome2rust report "/path/to/User Data" -f html -o ./case_report.html
 chrome2rust report "/path/to/User Data" -f all -o ./forensic_bundle --decrypt
 ```
+
+### 4. Chain-of-Custody SHA-256 & Merkle Verification (`custody`)
+```bash
+# Compute per-file SHA-256 digests and RFC 6234 Merkle root across a Chrome profile
+chrome2rust custody "/path/to/User Data" -o ./custody.csv
+chrome2rust custody "/path/to/User Data" -o ./custody.json --json
+```
+
+### 5. Native OS Picker & Global Diagnostics
+```bash
+# Launch native host OS folder/file picker interactively when target paths are omitted
+chrome2rust --pick analyze --json
+
+# Verbose tracing diagnostics (automatically written to stderr or --log-file)
+chrome2rust --log-level debug --log-file ./chrome2rust.log analyze "/path/to/User Data"
+```
+
+---
+
+## Model Context Protocol (MCP) for AI Agents
+
+`chrome2rust` includes a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) JSON-RPC 2.0 server (`chrome2rust mcp` or the standalone `chrome2rust-mcp` binary). All diagnostic logs stream to `stderr` so `stdout` carries clean JSON-RPC envelopes.
+
+Available tools:
+- **`chrome2rust_profiles`**: Discover local Chromium browsers, profiles, and cache folders.
+- **`chrome2rust_sniff`**: Classify files or directories by magic signature and Chrome artifact type.
+- **`chrome2rust_cache_list`**: Filter and enumerate HTTP cache entries as structured JSON.
+- **`chrome2rust_cache_inspect`**: Retrieve full HTTP response headers, TLS/ALPN state, X.509 certificates, SHA-256 digest, and UTF-8 preview.
+- **`chrome2rust_cache_extract`**: Decompress and export cached resources to an output folder.
+- **`chrome2rust_analyze`**: Execute complete read-only `User Data` forensic analysis.
+- **`chrome2rust_report`**: Generate offline HTML, JSON, Markdown, or bundled forensic reports.
+- **`chrome2rust_custody`**: Compute deterministic SHA-256 digests and balanced RFC 6234 Merkle root manifests.
+
+Inspect schemas or start the stdio server:
+```bash
+chrome2rust mcp --tools
+chrome2rust mcp
+```
+
+Client configuration ([`mcp.json`](mcp.json)):
+```json
+{
+  "mcpServers": {
+    "chrome2rust": {
+      "command": "chrome2rust",
+      "args": ["mcp"],
+      "env": {
+        "RUST_LOG": "warn"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Governance & Contributing
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 ---
 

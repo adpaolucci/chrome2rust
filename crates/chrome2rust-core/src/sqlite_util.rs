@@ -79,9 +79,7 @@ impl ForensicSqlite {
 
     pub fn list_tables(&self) -> HashSet<String> {
         let mut out = HashSet::new();
-        if let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        if let Ok(mut stmt) = self.conn.prepare("SELECT name FROM sqlite_master WHERE type='table'")
             && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
         {
             for name in rows.flatten() {

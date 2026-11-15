@@ -1,0 +1,26 @@
+[package]
+name = "chrome2rust-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native cross-platform Win32/MMC desktop graphical console for chrome2rust in 100% pure Rust"
+
+[[bin]]
+name = "chrome2rust-gui"
+path = "src/main.rs"
+
+[dependencies]
+chrome2rust-core.workspace = true
+chrome2rust-cache.workspace = true
+chrome2rust-forensics.workspace = true
+chrome2rust-report.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+image.workspace = true
+tracing.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
+rfd.workspace = true
+arboard.workspace = true

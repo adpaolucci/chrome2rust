@@ -1,0 +1,27 @@
+[package]
+name = "chrome2rust-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model Context Protocol (MCP) server for chrome2rust Chrome cache inspection, User Data forensics, and reporting"
+
+[[bin]]
+name = "chrome2rust-mcp"
+path = "src/main.rs"
+
+[dependencies]
+chrome2rust-core.workspace = true
+chrome2rust-cache.workspace = true
+chrome2rust-forensics.workspace = true
+chrome2rust-report.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

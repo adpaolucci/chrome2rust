@@ -1,8 +1,8 @@
-pub mod cache;
 pub mod crypto;
 pub mod discovery;
 pub mod error;
-pub mod forensics;
-pub mod report;
+pub mod logging;
 pub mod sqlite_util;
 pub mod time;
+
+pub use logging::init_logging;

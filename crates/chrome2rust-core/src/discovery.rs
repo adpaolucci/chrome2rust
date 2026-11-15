@@ -101,20 +101,24 @@ pub fn default_browser_locations() -> Vec<(BrowserKind, PathBuf, Option<PathBuf>
             let specs: &[(BrowserKind, &str, &str)] = &[
                 (BrowserKind::Chrome, "google-chrome", "google-chrome"),
                 (BrowserKind::ChromeBeta, "google-chrome-beta", "google-chrome-beta"),
-                (BrowserKind::ChromeDev, "google-chrome-unstable", "google-chrome-unstable"),
+                (
+                    BrowserKind::ChromeDev,
+                    "google-chrome-unstable",
+                    "google-chrome-unstable",
+                ),
                 (BrowserKind::Chromium, "chromium", "chromium"),
                 (BrowserKind::Edge, "microsoft-edge", "microsoft-edge"),
-                (BrowserKind::Brave, "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser"),
+                (
+                    BrowserKind::Brave,
+                    "BraveSoftware/Brave-Browser",
+                    "BraveSoftware/Brave-Browser",
+                ),
                 (BrowserKind::Opera, "opera", "opera"),
                 (BrowserKind::Vivaldi, "vivaldi", "vivaldi"),
                 (BrowserKind::Yandex, "yandex-browser", "yandex-browser"),
             ];
             for (kind, cfg_rel, cache_rel) in specs {
-                out.push((
-                    *kind,
-                    config.join(cfg_rel),
-                    cache.as_ref().map(|c| c.join(cache_rel)),
-                ));
+                out.push((*kind, config.join(cfg_rel), cache.as_ref().map(|c| c.join(cache_rel))));
             }
         }
     }
@@ -127,20 +131,24 @@ pub fn default_browser_locations() -> Vec<(BrowserKind, PathBuf, Option<PathBuf>
                 (BrowserKind::Chrome, "Google/Chrome", "Google/Chrome"),
                 (BrowserKind::ChromeBeta, "Google/Chrome Beta", "Google/Chrome Beta"),
                 (BrowserKind::ChromeDev, "Google/Chrome Dev", "Google/Chrome Dev"),
-                (BrowserKind::ChromeCanary, "Google/Chrome Canary", "Google/Chrome Canary"),
+                (
+                    BrowserKind::ChromeCanary,
+                    "Google/Chrome Canary",
+                    "Google/Chrome Canary",
+                ),
                 (BrowserKind::Chromium, "Chromium", "Chromium"),
                 (BrowserKind::Edge, "Microsoft Edge", "Microsoft Edge"),
-                (BrowserKind::Brave, "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser"),
+                (
+                    BrowserKind::Brave,
+                    "BraveSoftware/Brave-Browser",
+                    "BraveSoftware/Brave-Browser",
+                ),
                 (BrowserKind::Opera, "com.operasoftware.Opera", "com.operasoftware.Opera"),
                 (BrowserKind::Vivaldi, "Vivaldi", "Vivaldi"),
                 (BrowserKind::Yandex, "Yandex/YandexBrowser", "Yandex/YandexBrowser"),
             ];
             for (kind, rel, cache_rel) in specs {
-                out.push((
-                    *kind,
-                    app_support.join(rel),
-                    caches.as_ref().map(|c| c.join(cache_rel)),
-                ));
+                out.push((*kind, app_support.join(rel), caches.as_ref().map(|c| c.join(cache_rel))));
             }
         }
     }
@@ -303,10 +311,9 @@ pub fn discover_profiles_in_user_data(
             for probe in ["History", "Preferences", "Cookies"] {
                 if let Ok(md) = std::fs::metadata(p.path.join(probe))
                     && let Ok(mtime) = md.modified()
+                    && newest.is_none_or(|(best, _)| mtime > best)
                 {
-                    if newest.is_none_or(|(best, _)| mtime > best) {
-                        newest = Some((mtime, idx));
-                    }
+                    newest = Some((mtime, idx));
                 }
             }
         }
@@ -443,5 +450,112 @@ pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
         profile_dirs,
         cache_dirs,
         last_used_profile: last_used,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArtifactFormat {
+    UserDataRoot,
+    ProfileDirectory,
+    SimpleCacheDirectory,
+    BlockfileCacheDirectory,
+    SimpleCacheEntryFile,
+    BlockfileIndexOrData,
+    SqliteDatabase,
+    SnssSessionFile,
+    LevelDbStorageDirectory,
+    ChromeJsonMetadata,
+    Unknown,
+}
+
+impl ArtifactFormat {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ArtifactFormat::UserDataRoot => "Chrome User Data Root Directory",
+            ArtifactFormat::ProfileDirectory => "Chrome Profile Directory",
+            ArtifactFormat::SimpleCacheDirectory => "Chrome Simple Cache Directory",
+            ArtifactFormat::BlockfileCacheDirectory => "Chrome Blockfile Cache Directory",
+            ArtifactFormat::SimpleCacheEntryFile => "Chrome Simple Cache Entry File (*_0)",
+            ArtifactFormat::BlockfileIndexOrData => "Chrome Blockfile Cache Index / Data Container",
+            ArtifactFormat::SqliteDatabase => "SQLite 3 Database (History / Cookies / Login Data / Web Data)",
+            ArtifactFormat::SnssSessionFile => "Chrome SNSS Session / Tabs File",
+            ArtifactFormat::LevelDbStorageDirectory => "LevelDB Storage Directory",
+            ArtifactFormat::ChromeJsonMetadata => "Chrome JSON Metadata (Local State / Preferences / Bookmarks)",
+            ArtifactFormat::Unknown => "Unknown Artifact",
+        }
+    }
+}
+
+pub struct ArtifactSniffer;
+
+impl ArtifactSniffer {
+    pub fn sniff_path(path: &Path) -> ArtifactFormat {
+        if path.is_dir() {
+            if path.join("data_0").is_file() || path.join("data_1").is_file() {
+                return ArtifactFormat::BlockfileCacheDirectory;
+            }
+            if is_cache_data_dir(path) {
+                return ArtifactFormat::SimpleCacheDirectory;
+            }
+            if path.join("CURRENT").is_file() && path.join("MANIFEST-000001").is_file()
+                || std::fs::read_dir(path).ok().is_some_and(|rd| {
+                    rd.flatten()
+                        .any(|e| e.file_name().to_string_lossy().starts_with("MANIFEST-"))
+                })
+            {
+                return ArtifactFormat::LevelDbStorageDirectory;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if looks_like_profile_dir(path, &name) && !path.join("Local State").is_file() {
+                return ArtifactFormat::ProfileDirectory;
+            }
+            if path.join("Local State").is_file()
+                || path.join("Default").is_dir()
+                || path.join("Last Version").is_file()
+            {
+                return ArtifactFormat::UserDataRoot;
+            }
+            let resolved = resolve_target_path(path);
+            return match resolved.kind {
+                TargetKind::CacheDir => ArtifactFormat::SimpleCacheDirectory,
+                TargetKind::ProfileDir => ArtifactFormat::ProfileDirectory,
+                TargetKind::UserDataRoot if !resolved.profile_dirs.is_empty() => ArtifactFormat::UserDataRoot,
+                _ => ArtifactFormat::Unknown,
+            };
+        }
+
+        if path.is_file() {
+            use std::io::Read;
+            let mut buf = [0u8; 32];
+            if let Ok(mut f) = std::fs::File::open(path)
+                && let Ok(n) = f.read(&mut buf)
+            {
+                let head = &buf[..n];
+                if head.starts_with(b"SQLite format 3\0") {
+                    return ArtifactFormat::SqliteDatabase;
+                }
+                if head.starts_with(b"SNSS") {
+                    return ArtifactFormat::SnssSessionFile;
+                }
+                if n >= 8 && u64::from_le_bytes(head[0..8].try_into().unwrap_or([0; 8])) == 0xfcfb_6d1b_a772_5c30 {
+                    return ArtifactFormat::SimpleCacheEntryFile;
+                }
+                if n >= 4 {
+                    let magic = u32::from_le_bytes(head[0..4].try_into().unwrap_or([0; 4]));
+                    if magic == 0xc103_cac3 || magic == 0xc104_cac3 {
+                        return ArtifactFormat::BlockfileIndexOrData;
+                    }
+                }
+                let trimmed = head.iter().copied().find(|b| !b.is_ascii_whitespace());
+                if trimmed == Some(b'{') {
+                    return ArtifactFormat::ChromeJsonMetadata;
+                }
+            }
+        }
+
+        ArtifactFormat::Unknown
     }
 }

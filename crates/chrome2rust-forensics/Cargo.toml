@@ -1,0 +1,26 @@
+[package]
+name = "chrome2rust-forensics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Google Chrome User Data forensic analyzer, LevelDB/SNSS parsers, timeline engine, findings, and SHA-256 Merkle custody manifests"
+
+[dependencies]
+chrome2rust-core.workspace = true
+chrome2rust-cache.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+snap.workspace = true
+ruzstd.workspace = true
+sha2.workspace = true
+url.workspace = true
+csv.workspace = true
+walkdir.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
