@@ -1,0 +1,36 @@
+[package]
+name = "chrome2rust-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+flate2.workspace = true
+brotli.workspace = true
+ruzstd.workspace = true
+snap.workspace = true
+crc32fast.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+aes-gcm.workspace = true
+aes.workspace = true
+cbc.workspace = true
+x509-parser.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+url.workspace = true
+csv.workspace = true
+dirs.workspace = true
+image.workspace = true
+tempfile.workspace = true

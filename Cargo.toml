@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/chrome2rust-core",
+    "crates/chrome2rust",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/adpaolucci/chrome2rust"
+authors = ["adpaolucci"]
+description = "All-in-one Chrome cache viewer (ChromeCacheView clone) and Google Chrome User Data forensic analysis suite"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.34", features = ["bundled"] }
+flate2 = "1.1"
+brotli = "9.1"
+ruzstd = "0.9"
+snap = "1.1"
+crc32fast = "1.5"
+sha2 = "0.10"
+sha1 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = "0.1"
+x509-parser = "0.18"
+walkdir = "2.5"
+regex = "1.13"
+url = "2.5"
+csv = "1.4"
+dirs = "7.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+tempfile = "3.20"
+clap = { version = "4.6", features = ["derive"] }
+eframe = "0.33"
+egui_extras = { version = "0.33", features = ["all_loaders"] }
+rfd = "0.17"
+arboard = "3.6"
