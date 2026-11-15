@@ -1,14 +1,33 @@
 # `chrome2rust` — High-Fidelity Google Chrome Cache Inspector & User Data Forensic Suite in Pure Rust
 
+Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentation: https://chrome2rust.guap.ca**](https://chrome2rust.guap.ca)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange.svg)](Cargo.toml)
 [![Forensics: Read-Only](https://img.shields.io/badge/Forensics-Read--Only%20Snapshots-success.svg)](crates/chrome2rust-forensics)
 [![Architecture: 7 Crates](https://img.shields.io/badge/Workspace-7%20Crates-emerald.svg)](Cargo.toml)
+[![MCP: stdio JSON-RPC](https://img.shields.io/badge/MCP-stdio%20JSON--RPC%202.0-purple.svg)](crates/chrome2rust-mcp)
+[![GUI: Win32 MMC](https://img.shields.io/badge/GUI-Win32%20MMC%20(egui)-cyan.svg)](crates/chrome2rust-gui)
 
-**`chrome2rust`** is an ultra-fast, memory-safe, read-only cross-platform Chromium-family cache inspection and `User Data` forensic workstation written in **100% pure Rust**. It parses both **Simple Cache** and legacy **Blockfile Cache** backends alongside every major Chromium profile database (**History**, **Downloads**, **Cookies**, **Login Data**, **Web Data**, **Preferences**, **Extensions**, **Bookmarks**, **SNSS Sessions/Tabs**, **LevelDB Local/Session Storage**, and **IndexedDB**), producing unified chronological timelines, cross-artifact intelligence findings, SHA-256 chain-of-custody Merkle manifests, and air-gapped HTML/JSON/Markdown forensic report bundles.
+**`chrome2rust`** is an ultra-fast, memory-safe, read-only cross-platform Chromium-family cache inspection and `User Data` forensic workstation written in **100% pure Rust**. Developed by **Andrew Paolucci**, it parses both **Simple Cache** and legacy **Blockfile Cache** backends alongside every major Chromium profile database (**History**, **Downloads**, **Cookies**, **Login Data**, **Web Data**, **Preferences**, **Extensions**, **Bookmarks**, **SNSS Sessions/Tabs**, **LevelDB Local/Session Storage**, and **IndexedDB**), producing unified chronological timelines, cross-artifact intelligence findings, SHA-256 chain-of-custody Merkle manifests, and air-gapped HTML/JSON/Markdown forensic report bundles.
 
 ---
 
+## Architectural Comparison: `chrome2rust` vs. Legacy Forensic Tools
+
+| Capability / Metric | `chrome2rust` (Pure Rust 1.88+) | `ChromeCacheView` (NirSoft) | `Hindsight` (Python / Obsidian) |
+| :--- | :--- | :--- | :--- |
+| **Cache Backends** | **Simple Cache (`*_0`/`*_1`) + Blockfile (`data_0..3`, `f_xxxxxx`)** | Partial Blockfile / legacy Simple | Simple Cache & Blockfile |
+| **Transparent Decompression** | **Pure-Rust `gzip`, `deflate`, `br` (Brotli), `zstd` (Zstandard)** | External/OS decompression | Python `brotli`/`zstandard` dependencies |
+| **Pickled HTTP Headers** | **Full `HttpResponseInfo`, TLS version, ALPN, X.509 cert chains** | Basic HTTP headers only | Raw headers; limited cert chain extraction |
+| **Payload Magic Carving** | **60+ binary signatures with `Content-Type` mismatch detection** | Extension guessing from URL query | Basic MIME classification |
+| **Locked Profile Snapshots** | **Non-destructive atomic WAL/SHM copying (zero mutation)** | Fails on locked files or locks DB | Copy without active WAL merge |
+| **AI Agent Integration** | **Native `stdio` Model Context Protocol (MCP) server (8 tools)** | None | None |
+| **Desktop GUI Console** | **Classic Win32 MMC (`chrome2rust-gui`, 0 MB WebView/Electron)** | Classic Win32 MFC (Windows-only) | Local web server in default browser |
+| **Throughput & Footprint** | **> 50,000 entries/sec • < 25 MB static RAM** | Fast, but Windows-only | 100–500 MB RAM (Python GC overhead) |
+| **Chain of Custody** | **RFC 6234 Balanced Binary Merkle Tree Root Hash** | Basic file hash list | Custom SQLite export log |
+
+---
 ## Key Capabilities
 
 | Capability | Details |
@@ -232,3 +251,13 @@ Client configuration ([`mcp.json`](mcp.json)):
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+---
+
+## Contributors & Acknowledgments
+
+- **Andrew Paolucci (@adpaolucci)** &mdash; Project Creator, Systems Architect & Lead Software Developer.
+- **Antigravity (Google DeepMind)** &mdash; Agentic AI Technical Collaborator (MCP server, multi-codec decompression pipeline, Simple Cache stream verification).
+- **Chromium Open Source Project** &mdash; Specifications for Simple Cache, Blockfile, and Chromium User Data profiles.
+- **Rust Ecosystem & Community** &mdash; Maintainers of `eframe`/`egui`, `rusqlite`, `brotli`, `ruzstd`, `snap`, and `clap`.

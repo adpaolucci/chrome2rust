@@ -15,8 +15,12 @@ version = "0.2.2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/adpaolucci/chrome2rust"
+homepage = "https://chrome2rust.guap.ca"
+documentation = "https://chrome2rust.guap.ca"
 authors = ["Chrome2Rust Contributors"]
 description = "Blazing-fast, memory-safe Google Chrome cache inspection and User Data forensic workstation in 100% pure Rust"
+keywords = ["chrome", "forensics", "cache", "mcp", "merkle"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 chrome2rust-core = { path = "crates/chrome2rust-core" }

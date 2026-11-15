@@ -1,0 +1,33 @@
+# Smithery configuration for chrome2rust
+# https://smithery.ai
+name: chrome2rust-mcp
+version: "0.2.2"
+description: "High-fidelity Google Chrome cache inspection & User Data forensic suite in 100% pure Rust with stdio Model Context Protocol (MCP) server for AI agents"
+repository: "https://github.com/adpaolucci/chrome2rust"
+license: "MIT"
+
+entrypoint:
+  type: stdio
+  command: chrome2rust-mcp
+
+build:
+  type: cargo
+  crate: chrome2rust-mcp
+
+tools:
+  - name: discover_profiles
+    description: "Auto-detect installed Chrome, Edge, Brave, and Opera profile paths across Windows, macOS, and Linux."
+  - name: sniff_cache
+    description: "Identify cache backend (Simple vs Blockfile), version, index health, and entry counts."
+  - name: inspect_cache
+    description: "Query cached HTTP requests, decompress payloads, and decode pickled HttpResponseInfo headers."
+  - name: extract_cache
+    description: "Extract cached files to disk with magic-byte extension recovery and timestamp preservation."
+  - name: analyze_user_data
+    description: "Execute non-destructive WAL snapshots for History, Cookies, Logins, Web Data, Extensions, and LevelDB."
+  - name: generate_report
+    description: "Generate self-contained, air-gapped HTML, JSON, or Markdown forensic report bundles."
+  - name: verify_custody
+    description: "Validate SHA-256 Merkle tree roots to prove evidence has remained untampered since acquisition."
+  - name: launch_gui
+    description: "Spawn the native classic Win32 MMC desktop forensic console (chrome2rust-gui)."

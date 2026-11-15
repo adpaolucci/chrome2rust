@@ -1,0 +1,8 @@
+{
+  "name": "Chrome2Rust Forensic Studio Desktop",
+  "description": "High-fidelity Google Chrome cache inspector & User Data forensic suite in pure Rust with read-only WAL/SHM snapshots and Model Context Protocol (MCP) server.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
