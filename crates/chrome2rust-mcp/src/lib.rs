@@ -2,7 +2,7 @@ use chrome2rust_cache::export::{ExtractFilenameMode, ExtractOptions, extract_cac
 use chrome2rust_cache::simple::parse_simple_entry_file;
 use chrome2rust_cache::{CacheScanOptions, CacheSortField, load_cache_from_paths, sort_cache_entries};
 use chrome2rust_core::crypto::CryptoOptions;
-use chrome2rust_core::discovery::{ArtifactSniffer, discover_local_browsers, resolve_target_path};
+use chrome2rust_core::discovery::{ArtifactFormat, ArtifactSniffer, discover_local_browsers, resolve_target_path};
 use chrome2rust_forensics::custody::{generate_custody_manifest, write_custody_manifest};
 use chrome2rust_forensics::{AnalysisOptions, analyze_user_data};
 use chrome2rust_report::{ReportFormat, write_report};
@@ -27,7 +27,7 @@ pub fn get_tools_manifest() -> Value {
         },
         {
             "name": "chrome2rust_sniff",
-            "description": "Inspect file magic headers or directory layout to identify Chrome artifact format.",
+            "description": "Inspect file magic headers, container structures, missing/mismatched extensions, or directory layout to identify Chrome artifacts and cached payloads.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -68,7 +68,7 @@ pub fn get_tools_manifest() -> Value {
         },
         {
             "name": "chrome2rust_cache_extract",
-            "description": "Extract cached payloads from Chrome cache into an output directory with decompression and timestamp preservation.",
+            "description": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -76,7 +76,8 @@ pub fn get_tools_manifest() -> Value {
                     "output_dir": { "type": "string", "description": "Destination directory for extracted files" },
                     "url": { "type": "string", "description": "Optional URL substring filter" },
                     "content_type": { "type": "string", "description": "Optional Content-Type substring filter" },
-                    "website_dirs": { "type": "boolean", "description": "Reconstruct host/path directory tree" }
+                    "website_dirs": { "type": "boolean", "description": "Reconstruct host/path directory tree" },
+                    "prefer_detected_ext": { "type": "boolean", "description": "Replace existing mismatched extension with payload-detected extension" }
                 },
                 "required": ["path", "output_dir"]
             }
@@ -135,12 +136,29 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
             if !path.exists() {
                 return Err(format!("Path does not exist: {p_str}"));
             }
-            let fmt = ArtifactSniffer::sniff_path(path);
+            let mut insp = ArtifactSniffer::inspect_path(path);
+            if insp.artifact_format == ArtifactFormat::SimpleCacheEntryFile && insp.detected_mime.is_none() {
+                let parent = path.parent().unwrap_or_else(|| Path::new("."));
+                if let Ok(Some(entry)) = parse_simple_entry_file(path, parent, &CacheScanOptions::default()) {
+                    insp.detected_mime = entry.detected_content_type.or(entry.content_type);
+                    insp.suggested_extension = entry.detected_extension;
+                    insp.file_signature = entry.file_signature;
+                    insp.extension_mismatch = entry.mime_mismatch;
+                }
+            }
             let resolved = resolve_target_path(path);
             Ok(json!({
                 "path": p_str,
-                "format": format!("{fmt:?}"),
-                "format_name": fmt.name(),
+                "format": format!("{:?}", insp.artifact_format),
+                "format_name": insp.artifact_format_name,
+                "detected_mime": insp.detected_mime,
+                "suggested_extension": insp.suggested_extension,
+                "file_signature": insp.file_signature,
+                "detection_source": insp.detection_source,
+                "current_extension": insp.current_extension,
+                "missing_extension": insp.missing_extension,
+                "extension_mismatch": insp.extension_mismatch,
+                "suggested_filename": insp.suggested_filename,
                 "target_kind": resolved.kind,
                 "profiles_found": resolved.profile_dirs.len(),
                 "cache_dirs_found": resolved.cache_dirs.len(),
@@ -206,8 +224,16 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
             };
             let preview_text = if args["preview"].as_bool().unwrap_or(false) {
                 entry.read_decompressed_payload().ok().and_then(|bytes| {
-                    let s = &bytes[..bytes.len().min(4096)];
-                    std::str::from_utf8(s).ok().map(str::to_string)
+                    let prefix = &bytes[..bytes.len().min(4096)];
+                    let valid_len = match std::str::from_utf8(prefix) {
+                        Ok(_) => prefix.len(),
+                        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                        Err(_) => return None,
+                    };
+                    if valid_len == 0 && !prefix.is_empty() {
+                        return None;
+                    }
+                    std::str::from_utf8(&prefix[..valid_len]).ok().map(str::to_string)
                 })
             } else {
                 None
@@ -242,6 +268,7 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
                 update_modified_time: true,
                 new_name_if_exist: true,
                 decompress: true,
+                prefer_detected_extension: args["prefer_detected_ext"].as_bool().unwrap_or(false),
             };
             let summary = extract_cache_entries(&refs, &ext_opts).map_err(|e| e.to_string())?;
             serde_json::to_value(summary).map_err(|e| e.to_string())
@@ -438,5 +465,57 @@ mod tests {
         let custody = call_tool("chrome2rust_custody", &json!({ "path": dir.path().to_string_lossy() })).unwrap();
         assert_eq!(custody["artifact_count"], 2);
         assert_eq!(custody["merkle_root_sha256"].as_str().unwrap().len(), 64);
+
+        // Verify extensionless file sniffing and prefer_detected_ext tool schema
+        let webp_blob = dir.path().join("asset_blob");
+        std::fs::write(&webp_blob, b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00DATA").unwrap();
+        let sn = call_tool("chrome2rust_sniff", &json!({ "path": webp_blob.to_string_lossy() })).unwrap();
+        assert_eq!(sn["detected_mime"], "image/webp");
+        assert_eq!(sn["suggested_extension"], "webp");
+        assert_eq!(sn["missing_extension"], true);
+        assert_eq!(sn["suggested_filename"], "asset_blob.webp");
+
+        let extract_schema = arr.iter().find(|t| t["name"] == "chrome2rust_cache_extract").unwrap();
+        assert!(extract_schema["inputSchema"]["properties"]["prefer_detected_ext"].is_object());
+
+        // Verify UTF-8 multi-byte boundary at byte 4096 still returns preview_text
+        let entry_path = dir.path().join("utf8_4096_0");
+        let key = b"https://example.org/utf8";
+        let mut payload = vec![b'a'; 4095];
+        payload.extend_from_slice("€tail".as_bytes()); // 3-byte Euro sign straddles byte 4096
+        let s0 = b"HTTP/1.1 200 OK\0Content-Type: text/plain; charset=utf-8\0\0";
+        let mut s0_pickle = Vec::new();
+        let h_aligned = s0.len().div_ceil(4) * 4;
+        let plen = 4 + 8 + 8 + 4 + h_aligned;
+        s0_pickle.extend_from_slice(&(plen as u32).to_le_bytes());
+        s0_pickle.extend_from_slice(&3u32.to_le_bytes());
+        s0_pickle.extend_from_slice(&0i64.to_le_bytes());
+        s0_pickle.extend_from_slice(&0i64.to_le_bytes());
+        s0_pickle.extend_from_slice(&(s0.len() as u32).to_le_bytes());
+        s0_pickle.extend_from_slice(s0);
+        s0_pickle.resize(s0_pickle.len() + (h_aligned - s0.len()), 0);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&0xfcfb_6d1b_a772_5c30u64.to_le_bytes());
+        raw.extend_from_slice(&5u32.to_le_bytes());
+        raw.extend_from_slice(&(key.len() as u32).to_le_bytes());
+        raw.extend_from_slice(&0u64.to_le_bytes());
+        raw.extend_from_slice(key);
+        raw.extend_from_slice(&payload);
+        raw.extend_from_slice(&0xf4fa_6f45_970d_41d8u64.to_le_bytes());
+        raw.extend_from_slice(&[0u8; 16]);
+        raw.extend_from_slice(&s0_pickle);
+        raw.extend_from_slice(&0xf4fa_6f45_970d_41d8u64.to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        raw.extend_from_slice(&(s0_pickle.len() as u32).to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&entry_path, raw).unwrap();
+
+        let inspected = call_tool(
+            "chrome2rust_cache_inspect",
+            &json!({ "path": entry_path.to_string_lossy(), "preview": true }),
+        )
+        .unwrap();
+        assert_eq!(inspected["preview_text"].as_str().map(str::len), Some(4095));
     }
 }

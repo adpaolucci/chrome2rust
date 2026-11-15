@@ -121,6 +121,7 @@ pub struct ExtractDialogState {
     pub update_mtime: bool,
     pub new_name_if_exist: bool,
     pub decompress: bool,
+    pub prefer_detected_extension: bool,
 }
 
 pub struct ExportTableDialogState {
@@ -254,6 +255,7 @@ impl AppState {
                 update_mtime: true,
                 new_name_if_exist: true,
                 decompress: true,
+                prefer_detected_extension: false,
             },
             export_dlg: ExportTableDialogState {
                 only_selected: false,
@@ -432,6 +434,7 @@ impl AppState {
                     | CacheSortField::RecordCreatedTime
                     | CacheSortField::ExpirationTime
                     | CacheSortField::FileSize
+                    | CacheSortField::MimeMismatch
             );
         }
         sort_cache_entries(
@@ -774,14 +777,21 @@ impl AppState {
 }
 
 pub fn matches_quick_cat(entry: &CacheEntry, cat: ContentQuickCat) -> bool {
-    let ct = entry.content_type.as_deref().unwrap_or("");
+    let ct = entry.effective_content_type().unwrap_or("");
     match cat {
         ContentQuickCat::All => true,
         ContentQuickCat::Images => ct.starts_with("image/"),
         ContentQuickCat::Html => ct.contains("html"),
-        ContentQuickCat::ScriptsStyles => ct.contains("javascript") || ct.contains("ecmascript") || ct == "text/css",
+        ContentQuickCat::ScriptsStyles => {
+            ct.contains("javascript") || ct.contains("ecmascript") || ct.contains("typescript") || ct == "text/css"
+        }
         ContentQuickCat::JsonXml => ct.contains("json") || ct.contains("xml"),
-        ContentQuickCat::MediaFonts => ct.starts_with("video/") || ct.starts_with("audio/") || ct.starts_with("font/"),
+        ContentQuickCat::MediaFonts => {
+            ct.starts_with("video/")
+                || ct.starts_with("audio/")
+                || ct.starts_with("font/")
+                || ct == "application/vnd.ms-fontobject"
+        }
     }
 }
 

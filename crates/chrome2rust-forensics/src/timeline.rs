@@ -54,7 +54,7 @@ pub fn build_unified_timeline(profiles: &[ProfileAnalysis]) -> Vec<TimelineEvent
                     timestamp: ts,
                     profile: pname.clone(),
                     category: "Cache".into(),
-                    event_type: format!("Cached {}", c.content_type.as_deref().unwrap_or("resource")),
+                    event_type: format!("Cached {}", c.effective_content_type().unwrap_or("resource")),
                     target: c.url.clone(),
                     details: format!("{} | {} bytes | {}", c.server_response, c.file_size, c.cache_name),
                     source_artifact: c.cache_name.clone(),

@@ -265,6 +265,31 @@ fn build_synthetic_user_data(root: &std::path::Path) {
             "93.184.216.34",
             443,
         );
+
+        // WebP payload served without Content-Type or URL extension
+        let webp_stub = b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00TESTDATA";
+        write_simple_cache_entry(
+            &cache_dir.join("9999aaaabbbbcccc_0"),
+            "1/0/_dk_https://cdn.example.org https://cdn.example.org https://cdn.example.org/media/asset-42",
+            "HTTP/1.1 200 OK\0Server: cloudflare\0\0",
+            webp_stub,
+            "104.16.0.1",
+            443,
+        );
+
+        // Spoofed Content-Type: image/png containing Windows PE executable
+        let mut pe = vec![0u8; 128];
+        pe[0..2].copy_from_slice(b"MZ");
+        pe[0x3c..0x40].copy_from_slice(&64u32.to_le_bytes());
+        pe[64..68].copy_from_slice(b"PE\0\0");
+        write_simple_cache_entry(
+            &cache_dir.join("dddd000011112222_0"),
+            "1/0/_dk_https://cdn.example.org https://cdn.example.org https://cdn.example.org/badge.png",
+            "HTTP/1.1 200 OK\0Content-Type: image/png\0Server: nginx\0\0",
+            &pe,
+            "104.16.0.2",
+            443,
+        );
     }
 }
 
@@ -340,7 +365,7 @@ fn test_full_user_data_analysis_and_reports() {
     let report = analyze_user_data(ud_tmp.path(), &opts);
     assert_eq!(report.local_state.chrome_version.as_deref(), Some("156.0.8078.79"));
     assert_eq!(report.summary.profile_count, 1);
-    assert_eq!(report.summary.total_cache_entries, 2);
+    assert_eq!(report.summary.total_cache_entries, 4);
     assert_eq!(report.summary.total_history_urls, 2);
     assert_eq!(report.summary.total_history_visits, 2);
     assert_eq!(report.summary.total_downloads, 1);
@@ -356,15 +381,40 @@ fn test_full_user_data_analysis_and_reports() {
     assert_eq!(prof.cookies[0].encryption_scheme, EncryptionScheme::V10);
     assert_eq!(prof.cookies[0].value.as_deref(), Some("secret_session_tok"));
 
+    // Verify content detection on extensionless WebP and spoofed PE badge.png
+    let webp_entry = prof
+        .cache_entries
+        .iter()
+        .find(|e| e.url.ends_with("/media/asset-42"))
+        .unwrap();
+    assert_eq!(webp_entry.detected_content_type.as_deref(), Some("image/webp"));
+    assert_eq!(webp_entry.detected_extension.as_deref(), Some("webp"));
+    assert!(!webp_entry.mime_mismatch);
+
+    let spoofed_entry = prof
+        .cache_entries
+        .iter()
+        .find(|e| e.url.ends_with("/badge.png"))
+        .unwrap();
+    assert!(spoofed_entry.mime_mismatch);
+    assert_eq!(spoofed_entry.detected_extension.as_deref(), Some("exe"));
+
     // Extension risk flags
     assert!(!prof.extensions[0].risk_flags.is_empty());
 
     // Forensic intelligence findings triggered:
-    // Critical insecure credential, High dangerous download + sideloaded ext, Medium seq gap + cache orphan HTML
+    // Critical insecure credential, High dangerous download + sideloaded ext + MIME mismatch,
+    // Medium seq gap + cache orphan HTML
     assert!(report.findings.iter().any(|f| f.severity == FindingSeverity::Critical));
     assert!(report.findings.iter().any(|f| f.category == "Downloads"));
     assert!(report.findings.iter().any(|f| f.category == "History Integrity"));
     assert!(report.findings.iter().any(|f| f.category == "Cross-Artifact"));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.category == "Cache" && f.severity == FindingSeverity::High && f.title.contains("MIME Mismatch"))
+    );
 
     // Write full report bundle (HTML, JSON, Markdown)
     let out_dir = TempDir::new().unwrap();
@@ -378,11 +428,15 @@ fn test_full_user_data_analysis_and_reports() {
     let html_content = std::fs::read_to_string(&written[0]).unwrap();
     assert!(html_content.contains("chrome2rust Forensic Report"));
     assert!(html_content.contains("orphan.example.org"));
+    assert!(html_content.contains("image/webp"));
+    assert!(html_content.contains("badge.png"));
     assert!(!html_content.contains("https://cdn.example.org/payload.exe</script>"));
 
     let md_content = std::fs::read_to_string(&written[2]).unwrap();
     assert!(md_content.contains("Alice Investigation"));
     assert!(md_content.contains("Compromised / Insecure Saved Credentials"));
+    assert!(md_content.contains("Declared Type | Detected Type | Ext"));
+    assert!(md_content.contains("MIME Mismatch"));
 }
 
 #[test]
@@ -393,7 +447,7 @@ fn test_cache_export_formats_extraction_and_delete() {
     let rep = analyze_user_data(ud_tmp.path(), &AnalysisOptions::default());
     let mut entries = rep.profiles[0].cache_entries.clone();
     sort_cache_entries(&mut entries, CacheSortField::Url, false, None);
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 4);
 
     // Export in every supported cache table format
     let cols = CacheColumn::default_columns();
@@ -410,6 +464,7 @@ fn test_cache_export_formats_extraction_and_delete() {
         let rendered = render_cache_export(&entries, fmt, &cols, true, false).unwrap();
         assert!(rendered.contains("orphan.example.org"));
         assert!(rendered.contains("portal.example.org"));
+        assert!(rendered.contains("image/webp"));
     }
 
     // Extraction with website directory reconstruction + gunzip decompression + ext inference
@@ -424,11 +479,12 @@ fn test_cache_export_formats_extraction_and_delete() {
             update_modified_time: true,
             new_name_if_exist: true,
             decompress: true,
+            prefer_detected_extension: false,
         },
     )
     .unwrap();
 
-    assert_eq!(summary.extracted_count, 2);
+    assert_eq!(summary.extracted_count, 4);
     assert_eq!(summary.failed_count, 0);
 
     let extracted_html = ext_dir.path().join("orphan.example.org").join("page.html");
@@ -441,6 +497,13 @@ fn test_cache_export_formats_extraction_and_delete() {
 
     let extracted_png = ext_dir.path().join("portal.example.org").join("logo.png");
     assert!(extracted_png.is_file());
+
+    let extracted_webp = ext_dir
+        .path()
+        .join("cdn.example.org")
+        .join("media")
+        .join("asset-42.webp");
+    assert!(extracted_webp.is_file());
 
     // Delete one standalone Simple Cache entry
     let (deleted, skipped) = delete_cache_entries(&[&entries[0]]);

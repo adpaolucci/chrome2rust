@@ -41,7 +41,7 @@ pub fn render_cache_list(ui: &mut egui::Ui, state: &mut AppState, ctx: &egui::Co
                         let resp = ui.add_sized(
                             [220.0, 20.0],
                             egui::TextEdit::singleline(&mut state.quick_filter)
-                                .hint_text("URL, type, server, site, IP..."),
+                                .hint_text("URL, type, ext, sig, mismatch, server, IP..."),
                         );
                         if state.focus_quick_filter {
                             resp.request_focus();
@@ -172,7 +172,15 @@ pub fn render_cache_list(ui: &mut egui::Ui, state: &mut AppState, ctx: &egui::Co
                                     } else {
                                         col.value(entry, state.show_millis)
                                     };
-                                    let fg = if is_sel { Color32::WHITE } else { Color32::BLACK };
+                                    let fg = if is_sel {
+                                        Color32::WHITE
+                                    } else if entry.mime_mismatch
+                                        && matches!(*col, CacheColumn::MimeMismatch | CacheColumn::DetectedContentType)
+                                    {
+                                        Color32::from_rgb(185, 0, 0)
+                                    } else {
+                                        Color32::BLACK
+                                    };
                                     ui.label(RichText::new(val).size(11.0).color(fg));
                                 });
                             }
@@ -272,6 +280,10 @@ fn col_to_sort_field(col: CacheColumn) -> Option<CacheSortField> {
     match col {
         CacheColumn::Url => Some(CacheSortField::Url),
         CacheColumn::ContentType => Some(CacheSortField::ContentType),
+        CacheColumn::DetectedContentType => Some(CacheSortField::DetectedContentType),
+        CacheColumn::DetectedExtension => Some(CacheSortField::DetectedExtension),
+        CacheColumn::FileSignature => Some(CacheSortField::FileSignature),
+        CacheColumn::MimeMismatch => Some(CacheSortField::MimeMismatch),
         CacheColumn::FileSize | CacheColumn::CompressedSize => Some(CacheSortField::FileSize),
         CacheColumn::LastAccessed => Some(CacheSortField::LastAccessed),
         CacheColumn::ServerTime => Some(CacheSortField::ServerTime),
@@ -293,7 +305,10 @@ fn col_to_sort_field(col: CacheColumn) -> Option<CacheSortField> {
 fn default_col_width(col: CacheColumn) -> f32 {
     match col {
         CacheColumn::Url => 320.0,
-        CacheColumn::ContentType => 130.0,
+        CacheColumn::ContentType | CacheColumn::DetectedContentType => 130.0,
+        CacheColumn::DetectedExtension => 85.0,
+        CacheColumn::FileSignature => 165.0,
+        CacheColumn::MimeMismatch => 95.0,
         CacheColumn::FileSize | CacheColumn::CompressedSize => 110.0,
         CacheColumn::LastAccessed
         | CacheColumn::ServerTime

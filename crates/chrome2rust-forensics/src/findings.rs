@@ -163,7 +163,7 @@ pub fn generate_findings_and_stats(profiles: &[ProfileAnalysis]) -> (Vec<Forensi
             .cache_entries
             .iter()
             .filter(|c| {
-                c.content_type.as_deref() == Some("text/html")
+                c.effective_content_type() == Some("text/html")
                     && !c.url.is_empty()
                     && !history_urls.contains(c.url.as_str())
             })
@@ -236,6 +236,54 @@ pub fn generate_findings_and_stats(profiles: &[ProfileAnalysis]) -> (Vec<Forensi
                 title: format!("{} Deleted Blockfile Separate Cache Payloads", deleted_cache.len()),
                 summary: "Blockfile index references external f_xxxxxx payload files no longer present on disk.".into(),
                 evidence: deleted_cache.into_iter().take(20).collect(),
+            });
+        }
+
+        // 9. Cached payload declared MIME vs. magic/heuristic mismatch
+        let mismatched_cache: Vec<_> = p.cache_entries.iter().filter(|c| c.mime_mismatch).collect();
+        if !mismatched_cache.is_empty() {
+            let has_high_risk = mismatched_cache.iter().any(|c| {
+                let decl = c.content_type.as_deref().unwrap_or("");
+                let det = c.detected_content_type.as_deref().unwrap_or("");
+                chrome2rust_core::magic::is_high_risk_mime_mismatch(decl, det)
+            });
+            let severity = if has_high_risk {
+                FindingSeverity::High
+            } else {
+                FindingSeverity::Medium
+            };
+            let evidence: Vec<String> = mismatched_cache
+                .iter()
+                .take(20)
+                .map(|c| {
+                    format!(
+                        "{} (declared={}, detected={}, ext={}, sig={})",
+                        c.url,
+                        c.content_type.as_deref().unwrap_or("-"),
+                        c.detected_content_type.as_deref().unwrap_or("-"),
+                        c.detected_extension
+                            .as_deref()
+                            .map(|e| format!(".{e}"))
+                            .unwrap_or_else(|| "-".to_string()),
+                        c.file_signature.as_deref().unwrap_or("-")
+                    )
+                })
+                .collect();
+            findings.push(ForensicFinding {
+                severity,
+                profile: pname.clone(),
+                category: "Cache".into(),
+                title: format!(
+                    "{} Cached Payloads With Declared vs. Magic MIME Mismatch",
+                    mismatched_cache.len()
+                ),
+                summary: if has_high_risk {
+                    "One or more cached payloads contain executable, script, archive, or document magic bytes contradicting their HTTP Content-Type header (potential masquerading or content-type spoofing)."
+                } else {
+                    "Cached HTTP payloads have magic signatures or heuristics differing from their declared Content-Type header."
+                }
+                .into(),
+                evidence,
             });
         }
 

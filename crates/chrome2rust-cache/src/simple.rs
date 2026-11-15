@@ -1,7 +1,8 @@
-use super::decompress::decompress_payload;
+use super::decompress::decompress_payload_for_type;
 use super::pickle::{HttpResponseMetadata, parse_http_response_info};
 use super::{CacheBackendKind, CacheEntry, CacheLocationRef, CacheScanOptions, hex_lower};
 use chrome2rust_core::error::{ChromeError, DiagnosticWarning};
+use chrome2rust_core::magic::{ContentDetection, detect_content};
 use chrome2rust_core::time::system_time_to_utc;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -123,12 +124,15 @@ pub fn parse_simple_entry_file(
         return Ok(None);
     }
     let key_len = header.key_length as usize;
-    let key_end = HEADER_SIZE + key_len;
+    let key_end = HEADER_SIZE
+        .checked_add(key_len)
+        .ok_or_else(|| ChromeError::InvalidFormat("Key length overflow".into()))?;
     if key_end > bytes.len() {
         return Err(ChromeError::InvalidFormat("Key length exceeds file size".into()));
     }
     let raw_key_bytes = &bytes[HEADER_SIZE..key_end];
     let raw_key = String::from_utf8_lossy(raw_key_bytes).into_owned();
+    let (parsed_url, _, _) = super::parse_cache_key(&raw_key);
 
     // Parse EOF for stream 0 at the end of the file
     let eof0_start = bytes.len() - EOF_SIZE;
@@ -174,20 +178,24 @@ pub fn parse_simple_entry_file(
         crc_ok = false;
     }
 
-    // Stream 1 sits between [key_end .. eof1_start], followed by a 24-byte SimpleFileEOF
-    let (s1_range, s1_slice, alt_stream1_file) = if s0_start >= key_end + EOF_SIZE {
+    // Stream 1 sits between [key_end .. eof1_start], followed by a 24-byte SimpleFileEOF,
+    // or in a sibling *_1 stream file when inline stream1 is empty/omitted.
+    let (s1_range, s1_slice, alt_stream1_file) = if key_end.checked_add(EOF_SIZE).is_some_and(|e| s0_start >= e) {
         let eof1_start = s0_start - EOF_SIZE;
-        let eof1 = parse_eof(&bytes[eof1_start..s0_start]).unwrap();
-        if eof1.magic == SIMPLE_FINAL_MAGIC {
+        if let Some(eof1) = parse_eof(&bytes[eof1_start..s0_start])
+            && eof1.magic == SIMPLE_FINAL_MAGIC
+        {
             // Note: in modern Chromium, eof1.stream_size is often 0 even when stream 1 has bytes!
-            // The authoritative range is [key_end .. eof1_start], or if eof1.stream_size > 0 it matches.
             let slice = &bytes[key_end..eof1_start];
             if (eof1.flags & FLAG_HAS_CRC32) != 0 && crc32fast::hash(slice) != eof1.data_crc32 {
                 crc_ok = false;
             }
-            (Some((key_end, eof1_start)), slice, None)
+            if !slice.is_empty() {
+                (Some((key_end, eof1_start)), slice, None)
+            } else {
+                (None, &[][..], find_alt_stream_file(path))
+            }
         } else {
-            // Maybe single-stream or missing stream1 EOF; check *_1 file
             (None, &[][..], find_alt_stream_file(path))
         }
     } else {
@@ -217,12 +225,15 @@ pub fn parse_simple_entry_file(
     let compressed_size = payload_slice.len();
     let mut file_size = compressed_size;
     let mut payload_sha256 = None;
-
-    if !payload_slice.is_empty()
-        && (opts.decompress_sizes || opts.compute_hashes)
+    let detection: ContentDetection = if !payload_slice.is_empty()
         && payload_slice.len() <= 16 * 1024 * 1024
+        && (opts.decompress_sizes || opts.compute_hashes)
     {
-        let decompressed = match decompress_payload(payload_slice, http_meta.content_encoding.as_deref()) {
+        let decompressed = match decompress_payload_for_type(
+            payload_slice,
+            http_meta.content_encoding.as_deref(),
+            http_meta.content_type.as_deref(),
+        ) {
             Ok(v) => v,
             Err(_) => payload_slice.to_vec(),
         };
@@ -230,7 +241,30 @@ pub fn parse_simple_entry_file(
         if opts.compute_hashes && !decompressed.is_empty() {
             payload_sha256 = Some(hex_lower(&Sha256::digest(&decompressed)));
         }
-    }
+        detect_content(
+            &decompressed[..decompressed.len().min(64 * 1024)],
+            http_meta.content_type.as_deref(),
+            Some(&parsed_url),
+            http_meta.content_disposition_filename.as_deref(),
+        )
+    } else {
+        let can_inspect_raw = !payload_slice.is_empty()
+            && http_meta
+                .content_encoding
+                .as_deref()
+                .is_none_or(|e| e.trim().is_empty() || e.eq_ignore_ascii_case("identity"));
+        let sample = if can_inspect_raw {
+            &payload_slice[..payload_slice.len().min(64 * 1024)]
+        } else {
+            &[]
+        };
+        detect_content(
+            sample,
+            http_meta.content_type.as_deref(),
+            Some(&parsed_url),
+            http_meta.content_disposition_filename.as_deref(),
+        )
+    };
 
     let cache_name = path
         .file_name()
@@ -260,6 +294,7 @@ pub fn parse_simple_entry_file(
         false,
         Some(crc_ok),
         payload_sha256,
+        detection,
         loc,
     )))
 }
@@ -290,9 +325,13 @@ pub fn read_simple_stream_file_payload(path: &Path) -> Result<Vec<u8>, ChromeErr
     if header.magic != SIMPLE_INITIAL_MAGIC {
         return Ok(Vec::new());
     }
-    let key_end = HEADER_SIZE + header.key_length as usize;
+    let Some(key_end) = HEADER_SIZE.checked_add(header.key_length as usize) else {
+        return Ok(Vec::new());
+    };
     let eof_start = bytes.len() - EOF_SIZE;
-    let eof = parse_eof(&bytes[eof_start..]).unwrap();
+    let Some(eof) = parse_eof(&bytes[eof_start..]) else {
+        return Ok(Vec::new());
+    };
     if eof.magic != SIMPLE_FINAL_MAGIC || key_end > eof_start {
         return Ok(Vec::new());
     }
@@ -391,5 +430,24 @@ mod tests {
 
     fn eof_zero_padding() -> [u8; 4] {
         [0u8; 4]
+    }
+
+    #[test]
+    fn test_simple_cache_overflow_guards() {
+        let dir = TempDir::new().unwrap();
+        let entry_path = dir.path().join("badkey_0");
+        let stream_path = dir.path().join("badkey_1");
+
+        let mut bad = Vec::new();
+        bad.extend_from_slice(&SIMPLE_INITIAL_MAGIC.to_le_bytes());
+        bad.extend_from_slice(&5u32.to_le_bytes());
+        bad.extend_from_slice(&u32::MAX.to_le_bytes()); // key_length = u32::MAX
+        bad.extend_from_slice(&0u64.to_le_bytes());
+        bad.extend_from_slice(&[0u8; EOF_SIZE]);
+        std::fs::write(&entry_path, &bad).unwrap();
+        std::fs::write(&stream_path, &bad).unwrap();
+
+        assert!(parse_simple_entry_file(&entry_path, dir.path(), &CacheScanOptions::default()).is_err());
+        assert!(read_simple_stream_file_payload(&stream_path).unwrap().is_empty());
     }
 }

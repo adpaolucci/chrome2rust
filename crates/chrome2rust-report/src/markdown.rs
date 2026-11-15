@@ -420,13 +420,23 @@ pub fn render_markdown_report(report: &UserDataReport) -> String {
         if !p.cache_entries.is_empty() {
             let _ = writeln!(out, "### Cached Resources (Top 50 of {})", p.cache_entries.len());
             let _ = writeln!(out);
-            let _ = writeln!(out, "| Content-Type | Size | Status | Last Accessed | Server | URL |");
-            let _ = writeln!(out, "| --- | ---: | --- | --- | --- | --- |");
+            let _ = writeln!(
+                out,
+                "| Declared Type | Detected Type | Ext | Size | Status | Last Accessed | Server | URL |"
+            );
+            let _ = writeln!(out, "| --- | --- | --- | ---: | --- | --- | --- | --- |");
             for c in p.cache_entries.iter().take(50) {
+                let det = match (&c.detected_content_type, c.mime_mismatch) {
+                    (Some(dt), true) => format!("{dt} (!)"),
+                    (Some(dt), false) => dt.clone(),
+                    (None, _) => String::new(),
+                };
                 let _ = writeln!(
                     out,
-                    "| {} | {} | {} | {} | {} | {} |",
+                    "| {} | {} | {} | {} | {} | {} | {} | {} |",
                     md_cell(c.content_type.as_deref().unwrap_or("")),
+                    md_cell(&det),
+                    md_cell(c.detected_extension.as_deref().unwrap_or("")),
                     format_bytes(c.file_size as u64),
                     md_cell(&c.server_response),
                     format_utc_opt(c.last_accessed, false),

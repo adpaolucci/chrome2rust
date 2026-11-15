@@ -1,7 +1,7 @@
 # `chrome2rust` — High-Fidelity Google Chrome Cache Inspector & User Data Forensic Suite in Pure Rust
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust: 1.85+](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](Cargo.toml)
+[![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange.svg)](Cargo.toml)
 [![Forensics: Read-Only](https://img.shields.io/badge/Forensics-Read--Only%20Snapshots-success.svg)](crates/chrome2rust-forensics)
 [![Architecture: 7 Crates](https://img.shields.io/badge/Workspace-7%20Crates-emerald.svg)](Cargo.toml)
 
@@ -15,7 +15,8 @@
 | :--- | :--- |
 | **Dual-Backend HTTP Cache Engine** | Pure-Rust parsers for modern **Simple Cache** (`*_0` / `*_1` with CRC-32 & Key SHA-256 verification) and **Blockfile Cache** (`index`, `data_0`..`data_N`, `f_xxxxxx`, `RankingsNode` timestamps), tested against Chromium through v156+ |
 | **`HttpResponseInfo` Pickle Decoder** | Extracts raw HTTP headers, `request_time`/`response_time`, network isolation partition keys (`URL`, `Web Site`, `Frame`), server socket IP:port, TLS version, ALPN protocol, DNS aliases, and X.509 certificate chains |
-| **Transparent Payload Decompression** | Automatically decompresses `gzip`, `deflate`, `br` (Brotli), and `zstd` cached streams on preview, SHA-256 hashing, and disk extraction |
+| **Transparent Payload Decompression** | Automatically decompresses `gzip`, `deflate`, `br` (Brotli), and `zstd` cached streams on preview, SHA-256 hashing, and disk extraction (preserving archive payloads when unencoded) |
+| **Magic & Extension Recovery** | Pure-Rust deep payload identification across 60+ binary signatures, ISO-BMFF/RIFF/ZIP/OLE2 container inspection, text/JS/JSON/CSS/SVG/HTML heuristics, `Content-Disposition`, and URL query hints; flags HTTP `Content-Type` vs. magic mismatches |
 | **Safe Read-Only Evidence Handling** | Snapshots locked SQLite stores together with `-wal`, `-shm`, and `-journal` sidecars before reading so live browser profiles are never mutated |
 | **User Data Deep Forensics** | Analyzes `Local State`, `History` + `sqlite_sequence` deletion gaps, `Cookies`, `Login Data` + `insecure_credentials`, `Web Data`, `Preferences`, `Extensions` risk scoring, `Bookmarks`, SNSS `Sessions`/`Tabs`, pure-Rust `LevelDB` storage, and `IndexedDB` |
 | **Optional Best-Effort Decryption** | Supports `v10`/`v11` decryption using user-supplied passphrases (`PBKDF2-HMAC-SHA1`), hex AES-128/256 keys, Linux `"peanuts"` fallback, and Chromium DB v24+ 32-byte domain hash stripping |
@@ -83,7 +84,7 @@ Automatically locates installed profiles across **Google Chrome**, **Chromium**,
 ## Quick Start & Compilation
 
 ### Prerequisites
-- [Rust toolchain](https://rustup.rs/) (1.85 or newer / edition 2024).
+- [Rust toolchain](https://rustup.rs/) (1.88 or newer / edition 2024).
 - On Linux desktop builds of `chrome2rust-gui`: standard X11/Wayland/OpenGL development packages (`libssl-dev`, `libgtk-3-dev`, `libx11-dev`, `libgl1-mesa-dev`, `libwayland-dev`, `libxkbcommon-dev`).
 
 ### Build Release Binaries
@@ -135,8 +136,11 @@ chrome2rust cache list "/path/to/Cache_Data" --format table --sort last-accessed
 chrome2rust cache list "/path/to/Profile" --content-type "image/" --last 7d -f csv -o images.csv
 chrome2rust cache list "/path/to/Cache_Data" --filter "api" --hashes --columns url,content-type,size,sha256
 
-# Extract decompressed cached payloads reconstructing host/path directory structure
+# Extract decompressed cached payloads reconstructing host/path directory structure (recovering missing extensions)
 chrome2rust cache extract "/path/to/Cache_Data" -o ./extracted --website-dirs --filename-mode url
+
+# Extract while also replacing mismatched/spoofed filename extensions with magic-detected extensions
+chrome2rust cache extract "/path/to/Cache_Data" -o ./extracted --website-dirs --use-detected-ext
 
 # Deep-inspect headers, TLS/ALPN metadata, X.509 cert chains, and payload preview
 chrome2rust cache inspect "/path/to/Cache_Data/45b032600bc6b3f3_0" --preview

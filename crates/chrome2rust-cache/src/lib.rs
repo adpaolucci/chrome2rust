@@ -5,6 +5,7 @@ pub mod pickle;
 pub mod simple;
 
 use chrome2rust_core::error::{ChromeError, DiagnosticWarning};
+use chrome2rust_core::magic::{ContentDetection, is_generic_mime};
 use chrome2rust_core::time::{chrome_us_to_datetime, parse_http_date};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-use self::decompress::decompress_payload;
+use self::decompress::decompress_payload_for_type;
 use self::pickle::{HttpResponseMetadata, ParsedCertSummary, ParsedHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,16 @@ pub struct CacheEntry {
     pub content_type: Option<String>,
     pub raw_content_type: Option<String>,
     pub content_encoding: Option<String>,
+    #[serde(default)]
+    pub content_disposition_filename: Option<String>,
+    #[serde(default)]
+    pub detected_content_type: Option<String>,
+    #[serde(default)]
+    pub detected_extension: Option<String>,
+    #[serde(default)]
+    pub file_signature: Option<String>,
+    #[serde(default)]
+    pub mime_mismatch: bool,
     /// Compressed/stored payload length in bytes (stream 1).
     pub compressed_size: usize,
     /// Uncompressed payload length in bytes (if decompressible/known, else same as compressed_size).
@@ -114,6 +125,7 @@ impl CacheEntry {
         deleted_file: bool,
         crc32_valid: Option<bool>,
         payload_sha256: Option<String>,
+        detection: ContentDetection,
         location: CacheLocationRef,
     ) -> Self {
         let (url, partition_website, partition_frame) = parse_cache_key(&raw_key);
@@ -134,6 +146,11 @@ impl CacheEntry {
             content_type: http.content_type,
             raw_content_type: http.raw_content_type,
             content_encoding: http.content_encoding,
+            content_disposition_filename: http.content_disposition_filename,
+            detected_content_type: detection.mime,
+            detected_extension: detection.extension,
+            file_signature: detection.signature,
+            mime_mismatch: detection.mime_mismatch,
             compressed_size,
             file_size,
             last_accessed,
@@ -157,6 +174,18 @@ impl CacheEntry {
         }
     }
 
+    /// Returns the most accurate MIME type: prefers `detected_content_type` when declared MIME is
+    /// missing, generic (`application/octet-stream`), or contradicted by payload magic bytes.
+    pub fn effective_content_type(&self) -> Option<&str> {
+        if self.mime_mismatch {
+            return self.detected_content_type.as_deref().or(self.content_type.as_deref());
+        }
+        match self.content_type.as_deref() {
+            Some(ct) if !is_generic_mime(ct) => Some(ct),
+            other => self.detected_content_type.as_deref().or(other),
+        }
+    }
+
     /// Reads the raw stored payload bytes from disk.
     pub fn read_raw_payload(&self) -> Result<Vec<u8>, ChromeError> {
         let Some(loc) = &self.location else {
@@ -171,7 +200,7 @@ impl CacheEntry {
                         path: loc.primary_file.display().to_string(),
                         source: e,
                     })?;
-                    if end <= bytes.len() && start <= end {
+                    if end <= bytes.len() && start < end {
                         return Ok(bytes[start..end].to_vec());
                     }
                 }
@@ -197,7 +226,7 @@ impl CacheEntry {
         if raw.is_empty() {
             return Ok(raw);
         }
-        match decompress_payload(&raw, self.content_encoding.as_deref()) {
+        match decompress_payload_for_type(&raw, self.content_encoding.as_deref(), self.content_type.as_deref()) {
             Ok(dec) => Ok(dec),
             Err(_) => Ok(raw),
         }
@@ -217,27 +246,34 @@ impl CacheEntry {
     }
 
     pub fn is_image(&self) -> bool {
-        self.content_type.as_deref().is_some_and(|ct| ct.starts_with("image/"))
+        self.effective_content_type().is_some_and(|ct| ct.starts_with("image/"))
     }
 
     pub fn is_text_like(&self) -> bool {
-        let Some(ct) = self.content_type.as_deref() else {
+        let Some(ct) = self.effective_content_type() else {
             return false;
         };
         ct.starts_with("text/")
             || ct.contains("json")
             || ct.contains("javascript")
             || ct.contains("ecmascript")
+            || ct.contains("typescript")
             || ct.contains("xml")
+            || ct.contains("yaml")
+            || ct.contains("toml")
             || ct.contains("svg")
+            || ct.contains("mpegurl")
+            || ct.contains("x-pem-file")
             || ct.contains("x-www-form-urlencoded")
     }
 }
 
-/// Parses Chrome cache keys including modern network-isolation / double-key (`_dk_`) partitioning:
+/// Parses Chrome cache keys including modern network-isolation / double-key (`_dk_`) partitioning
+/// and Code Cache space-separated `<url> <origin>` keys:
 /// - `1/0/_dk_https://site https://frame https://url`
 /// - `_dk_https://site https://frame https://url`
 /// - `1/0/https://url`
+/// - `https://cdn.example/app.js https://example.com`
 /// - `https://url`
 pub fn parse_cache_key(raw_key: &str) -> (String, Option<String>, Option<String>) {
     let mut s = raw_key.trim();
@@ -253,7 +289,12 @@ pub fn parse_cache_key(raw_key: &str) -> (String, Option<String>, Option<String>
         }
     }
 
-    if let Some(after_dk) = s.strip_prefix("_dk_") {
+    let first_http = s.find("http://").or_else(|| s.find("https://"));
+    if let Some(dk_idx) = s.find("_dk_")
+        && (dk_idx == 0 || s[..dk_idx].ends_with('/') || s[..dk_idx].ends_with(' '))
+        && first_http.is_none_or(|h| dk_idx < h)
+    {
+        let after_dk = &s[dk_idx + 4..];
         let parts: Vec<&str> = after_dk.splitn(3, ' ').collect();
         match parts.as_slice() {
             [site, frame, url] => {
@@ -272,15 +313,26 @@ pub fn parse_cache_key(raw_key: &str) -> (String, Option<String>, Option<String>
     }
 
     // Legacy or unpartitioned key; sometimes space-separated metadata precedes URL
-    if let Some(idx) = s.find("http://").or_else(|| s.find("https://"))
-        && idx > 0
-    {
-        let prefix = s[..idx].trim();
-        let url = s[idx..].trim();
-        let mut prefix_parts = prefix.split_whitespace();
-        let site = prefix_parts.next().and_then(non_empty_opt);
-        let frame = prefix_parts.next().and_then(non_empty_opt);
-        return (url.to_string(), site, frame);
+    if let Some(idx) = first_http {
+        if idx > 0 {
+            let prefix = s[..idx].trim();
+            let url = s[idx..].trim();
+            let mut prefix_parts = prefix.split_whitespace();
+            let site = prefix_parts.next().and_then(non_empty_opt);
+            let frame = prefix_parts.next().and_then(non_empty_opt);
+            return (url.to_string(), site, frame);
+        }
+        // Code Cache key format: "<script_url> <top_frame_origin>"
+        if let Some((first_url, rest)) = s.split_once(' ') {
+            let trimmed_rest = rest.trim();
+            if trimmed_rest.starts_with("http://")
+                || trimmed_rest.starts_with("https://")
+                || trimmed_rest.starts_with("null")
+                || trimmed_rest.starts_with("chrome-extension://")
+            {
+                return (first_url.to_string(), non_empty_opt(trimmed_rest), None);
+            }
+        }
     }
 
     (s.to_string(), None, None)
@@ -349,6 +401,10 @@ impl Default for CacheScanOptions {
 pub enum CacheSortField {
     Url,
     ContentType,
+    DetectedContentType,
+    DetectedExtension,
+    FileSignature,
+    MimeMismatch,
     FileSize,
     LastAccessed,
     ServerTime,
@@ -370,6 +426,10 @@ impl CacheSortField {
         match name.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "url" => Some(Self::Url),
             "contenttype" | "type" => Some(Self::ContentType),
+            "detectedcontenttype" | "detectedtype" | "realcontenttype" => Some(Self::DetectedContentType),
+            "detectedextension" | "detectedext" | "extension" | "ext" => Some(Self::DetectedExtension),
+            "filesignature" | "signature" | "magic" => Some(Self::FileSignature),
+            "mimemismatch" | "mismatch" => Some(Self::MimeMismatch),
             "filesize" | "size" => Some(Self::FileSize),
             "lastaccessed" | "lastaccess" => Some(Self::LastAccessed),
             "servertime" => Some(Self::ServerTime),
@@ -412,10 +472,19 @@ pub fn matches_cache_filter(entry: &CacheEntry, opts: &CacheScanOptions) -> bool
     if let Some(ct_sub) = &opts.content_type_filter
         && !ct_sub.is_empty()
     {
+        let needle = ct_sub.to_ascii_lowercase();
         let matches_ct = entry
             .content_type
             .as_deref()
-            .is_some_and(|ct| ct.to_ascii_lowercase().contains(&ct_sub.to_ascii_lowercase()));
+            .is_some_and(|ct| ct.to_ascii_lowercase().contains(&needle))
+            || entry
+                .detected_content_type
+                .as_deref()
+                .is_some_and(|ct| ct.to_ascii_lowercase().contains(&needle))
+            || entry
+                .detected_extension
+                .as_deref()
+                .is_some_and(|ext| ext.to_ascii_lowercase().contains(&needle));
         if !matches_ct {
             return false;
         }
@@ -441,6 +510,23 @@ pub fn matches_cache_filter(entry: &CacheEntry, opts: &CacheScanOptions) -> bool
             .content_type
             .as_deref()
             .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
+        let in_det_ct = entry
+            .detected_content_type
+            .as_deref()
+            .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
+        let in_det_ext = entry
+            .detected_extension
+            .as_deref()
+            .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
+        let in_sig = entry
+            .file_signature
+            .as_deref()
+            .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
+        let in_disp = entry
+            .content_disposition_filename
+            .as_deref()
+            .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
+        let in_mismatch = entry.mime_mismatch && "mismatch".contains(&needle);
         let in_srv = entry
             .server_name
             .as_deref()
@@ -455,7 +541,19 @@ pub fn matches_cache_filter(entry: &CacheEntry, opts: &CacheScanOptions) -> bool
             .is_some_and(|s| s.to_ascii_lowercase().contains(&needle));
         let in_cache = entry.cache_name.to_ascii_lowercase().contains(&needle);
         let in_status = entry.server_response.to_ascii_lowercase().contains(&needle);
-        if !(in_url || in_ct || in_srv || in_site || in_ip || in_cache || in_status) {
+        if !(in_url
+            || in_ct
+            || in_det_ct
+            || in_det_ext
+            || in_sig
+            || in_disp
+            || in_mismatch
+            || in_srv
+            || in_site
+            || in_ip
+            || in_cache
+            || in_status)
+        {
             return false;
         }
     }
@@ -491,6 +589,23 @@ fn cmp_cache_field(a: &CacheEntry, b: &CacheEntry, field: CacheSortField) -> std
             .as_deref()
             .unwrap_or("")
             .cmp(b.content_type.as_deref().unwrap_or("")),
+        CacheSortField::DetectedContentType => a
+            .detected_content_type
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.detected_content_type.as_deref().unwrap_or("")),
+        CacheSortField::DetectedExtension => a
+            .detected_extension
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.detected_extension.as_deref().unwrap_or("")),
+        CacheSortField::FileSignature => a
+            .file_signature
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .cmp(&b.file_signature.as_deref().unwrap_or("").to_ascii_lowercase()),
+        CacheSortField::MimeMismatch => a.mime_mismatch.cmp(&b.mime_mismatch),
         CacheSortField::FileSize => a.file_size.cmp(&b.file_size),
         CacheSortField::LastAccessed => a.last_accessed.cmp(&b.last_accessed),
         CacheSortField::ServerTime => a.server_time.cmp(&b.server_time),
@@ -660,5 +775,11 @@ mod tests {
         assert_eq!(u3, k3);
         assert_eq!(s3, None);
         assert_eq!(f3, None);
+
+        let k4 = "https://cdn.example.com/bundle.js https://app.example.com";
+        let (u4, s4, f4) = parse_cache_key(k4);
+        assert_eq!(u4, "https://cdn.example.com/bundle.js");
+        assert_eq!(s4.as_deref(), Some("https://app.example.com"));
+        assert_eq!(f4, None);
     }
 }

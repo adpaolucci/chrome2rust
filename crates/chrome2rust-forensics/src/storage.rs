@@ -285,45 +285,90 @@ fn read_chrome_leveldb(
         .collect()
 }
 
+const MAX_LDB_BLOCK_BYTES: usize = 64 * 1024 * 1024;
+const MAX_LDB_ENTRIES_PER_BLOCK: usize = 200_000;
+
+/// Parses an in-memory LevelDB `.log` WAL buffer directly into decoded Chrome storage records.
+pub fn parse_leveldb_log_records(bytes: &[u8], is_local_storage: bool) -> Vec<LevelDbKvRecord> {
+    let mut kv = BTreeMap::new();
+    parse_leveldb_log(bytes, is_local_storage, &mut kv);
+    kv.into_iter()
+        .filter_map(|((origin, key), val_opt)| val_opt.map(|value| LevelDbKvRecord { origin, key, value }))
+        .collect()
+}
+
+/// Parses an in-memory LevelDB `.ldb` SSTable buffer directly into decoded Chrome storage records.
+pub fn parse_ldb_table_records(bytes: &[u8], is_local_storage: bool) -> Vec<LevelDbKvRecord> {
+    let mut kv = BTreeMap::new();
+    parse_ldb_table(bytes, is_local_storage, &mut kv);
+    kv.into_iter()
+        .filter_map(|((origin, key), val_opt)| val_opt.map(|value| LevelDbKvRecord { origin, key, value }))
+        .collect()
+}
+
 fn parse_leveldb_log(bytes: &[u8], is_local_storage: bool, kv: &mut BTreeMap<(String, String), Option<String>>) {
     const BLOCK_SIZE: usize = 32768;
     let mut pos = 0usize;
     let mut fragment_buf: Vec<u8> = Vec::new();
+    let mut oversized_fragment = false;
 
-    while pos + 7 <= bytes.len() {
+    while bytes.len().saturating_sub(pos) >= 7 {
         let block_rem = BLOCK_SIZE - (pos % BLOCK_SIZE);
         if block_rem < 7 {
-            pos += block_rem;
+            pos = match pos.checked_add(block_rem) {
+                Some(p) => p,
+                None => break,
+            };
             continue;
         }
         let len = u16::from_le_bytes([bytes[pos + 4], bytes[pos + 5]]) as usize;
         let rec_type = bytes[pos + 6];
         pos += 7;
-        if pos + len > bytes.len() {
+        let Some(end) = pos.checked_add(len) else {
+            break;
+        };
+        if end > bytes.len() {
             break;
         }
-        let chunk = &bytes[pos..pos + len];
-        pos += len;
+        let chunk = &bytes[pos..end];
+        pos = end;
 
         match rec_type {
             1 => {
                 // FULL
+                fragment_buf.clear();
+                oversized_fragment = false;
                 parse_write_batch(chunk, is_local_storage, kv);
             }
             2 => {
                 // FIRST
                 fragment_buf.clear();
-                fragment_buf.extend_from_slice(chunk);
+                if chunk.len() > MAX_LDB_BLOCK_BYTES {
+                    oversized_fragment = true;
+                } else {
+                    oversized_fragment = false;
+                    fragment_buf.extend_from_slice(chunk);
+                }
             }
             3 => {
                 // MIDDLE
-                fragment_buf.extend_from_slice(chunk);
+                if !oversized_fragment {
+                    if fragment_buf.len().saturating_add(chunk.len()) > MAX_LDB_BLOCK_BYTES {
+                        fragment_buf.clear();
+                        oversized_fragment = true;
+                    } else {
+                        fragment_buf.extend_from_slice(chunk);
+                    }
+                }
             }
             4 => {
                 // LAST
-                fragment_buf.extend_from_slice(chunk);
-                parse_write_batch(&fragment_buf, is_local_storage, kv);
+                if !oversized_fragment && fragment_buf.len().saturating_add(chunk.len()) <= MAX_LDB_BLOCK_BYTES {
+                    fragment_buf.extend_from_slice(chunk);
+                    parse_write_batch(&fragment_buf, is_local_storage, kv);
+                }
                 fragment_buf.clear();
+                oversized_fragment = false;
             }
             _ => {}
         }
@@ -381,25 +426,42 @@ fn parse_ldb_table(bytes: &[u8], is_local_storage: bool, kv: &mut BTreeMap<(Stri
     let mut foff = 0usize;
     let _metaindex_off = read_varint64(footer, &mut foff);
     let _metaindex_len = read_varint64(footer, &mut foff);
-    let Some(index_off) = read_varint64(footer, &mut foff) else {
+    let Some(index_off_u64) = read_varint64(footer, &mut foff) else {
         return;
     };
-    let Some(index_len) = read_varint64(footer, &mut foff) else {
+    let Some(index_len_u64) = read_varint64(footer, &mut foff) else {
         return;
     };
-    let Some(index_block) = read_ldb_block(bytes, index_off as usize, index_len as usize) else {
+    let Ok(index_off) = usize::try_from(index_off_u64) else {
+        return;
+    };
+    let Ok(index_len) = usize::try_from(index_len_u64) else {
+        return;
+    };
+    let Some(index_block) = read_ldb_block(bytes, index_off, index_len) else {
         return;
     };
 
+    let mut seen_blocks: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+
     for (_, handle_bytes) in iter_ldb_block(&index_block) {
         let mut hoff = 0usize;
-        let Some(boff) = read_varint64(&handle_bytes, &mut hoff) else {
+        let Some(boff_u64) = read_varint64(&handle_bytes, &mut hoff) else {
             continue;
         };
-        let Some(blen) = read_varint64(&handle_bytes, &mut hoff) else {
+        let Some(blen_u64) = read_varint64(&handle_bytes, &mut hoff) else {
             continue;
         };
-        let Some(data_block) = read_ldb_block(bytes, boff as usize, blen as usize) else {
+        if !seen_blocks.insert((boff_u64, blen_u64)) {
+            continue;
+        }
+        let Ok(boff) = usize::try_from(boff_u64) else {
+            continue;
+        };
+        let Ok(blen) = usize::try_from(blen_u64) else {
+            continue;
+        };
+        let Some(data_block) = read_ldb_block(bytes, boff, blen) else {
             continue;
         };
         for (ikey, val_bytes) in iter_ldb_block(&data_block) {
@@ -423,19 +485,42 @@ fn parse_ldb_table(bytes: &[u8], is_local_storage: bool, kv: &mut BTreeMap<(Stri
 fn read_ldb_block(file: &[u8], offset: usize, size: usize) -> Option<Vec<u8>> {
     // Each block is followed by 5-byte trailer: compression_type (1B) + crc (4B)
     let end = offset.checked_add(size)?;
-    if end + 5 > file.len() {
+    let trailer_end = end.checked_add(5)?;
+    if trailer_end > file.len() {
         return None;
     }
     let raw = &file[offset..end];
     let comp_type = file[end];
     match comp_type {
-        0 => Some(raw.to_vec()),
-        1 => snap::raw::Decoder::new().decompress_vec(raw).ok(),
-        2 => ruzstd::decoding::StreamingDecoder::new(raw).ok().and_then(|mut d| {
+        0 => {
+            if raw.len() > MAX_LDB_BLOCK_BYTES {
+                return None;
+            }
+            Some(raw.to_vec())
+        }
+        1 => {
+            let dec_len = snap::raw::decompress_len(raw).ok()?;
+            if dec_len > MAX_LDB_BLOCK_BYTES {
+                return None;
+            }
+            snap::raw::Decoder::new().decompress_vec(raw).ok()
+        }
+        2 => {
+            let mut d = ruzstd::decoding::StreamingDecoder::new(raw).ok()?;
             let mut out = Vec::new();
-            std::io::Read::read_to_end(&mut d, &mut out).ok()?;
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = std::io::Read::read(&mut d, &mut buf).ok()?;
+                if n == 0 {
+                    break;
+                }
+                if out.len().saturating_add(n) > MAX_LDB_BLOCK_BYTES {
+                    return None;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
             Some(out)
-        }),
+        }
         _ => None,
     }
 }
@@ -446,28 +531,56 @@ fn iter_ldb_block(block: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
         return entries;
     }
     let num_restarts = u32::from_le_bytes(block[block.len() - 4..].try_into().unwrap_or([0; 4])) as usize;
-    let restarts_bytes = num_restarts.saturating_mul(4);
-    if restarts_bytes + 4 > block.len() {
+    let Some(restarts_bytes) = num_restarts.checked_mul(4) else {
+        return entries;
+    };
+    let Some(footer_bytes) = restarts_bytes.checked_add(4) else {
+        return entries;
+    };
+    if footer_bytes > block.len() {
         return entries;
     }
-    let limit = block.len() - 4 - restarts_bytes;
+    let limit = block.len() - footer_bytes;
     let mut off = 0usize;
     let mut prev_key: Vec<u8> = Vec::new();
+    let mut total_decoded_bytes = 0usize;
 
-    while off < limit {
-        let Some(shared) = read_varint64(block, &mut off).map(|v| v as usize) else {
+    while off < limit && entries.len() < MAX_LDB_ENTRIES_PER_BLOCK {
+        let Some(shared_u64) = read_varint64(block, &mut off) else {
             break;
         };
-        let Some(non_shared) = read_varint64(block, &mut off).map(|v| v as usize) else {
+        let Some(non_shared_u64) = read_varint64(block, &mut off) else {
             break;
         };
-        let Some(val_len) = read_varint64(block, &mut off).map(|v| v as usize) else {
+        let Some(val_len_u64) = read_varint64(block, &mut off) else {
             break;
         };
-        if shared > prev_key.len() || off + non_shared + val_len > limit {
+        let Ok(shared) = usize::try_from(shared_u64) else {
+            break;
+        };
+        let Ok(non_shared) = usize::try_from(non_shared_u64) else {
+            break;
+        };
+        let Ok(val_len) = usize::try_from(val_len_u64) else {
+            break;
+        };
+        let Some(entry_end) = off.checked_add(non_shared).and_then(|x| x.checked_add(val_len)) else {
+            break;
+        };
+        if shared > prev_key.len() || entry_end > limit {
             break;
         }
-        let mut key = prev_key[..shared].to_vec();
+        let next_total = total_decoded_bytes
+            .saturating_add(shared)
+            .saturating_add(non_shared)
+            .saturating_add(val_len);
+        if next_total > MAX_LDB_BLOCK_BYTES {
+            break;
+        }
+        total_decoded_bytes = next_total;
+
+        let mut key = Vec::with_capacity(shared.saturating_add(non_shared));
+        key.extend_from_slice(&prev_key[..shared]);
         key.extend_from_slice(&block[off..off + non_shared]);
         off += non_shared;
         let val = block[off..off + val_len].to_vec();
@@ -495,12 +608,14 @@ fn read_varint64(buf: &[u8], off: &mut usize) -> Option<u64> {
 }
 
 fn read_varint_slice<'a>(buf: &'a [u8], off: &mut usize) -> Option<&'a [u8]> {
-    let len = read_varint64(buf, off)? as usize;
-    if *off + len > buf.len() {
+    let len_u64 = read_varint64(buf, off)?;
+    let len = usize::try_from(len_u64).ok()?;
+    let end = off.checked_add(len)?;
+    if end > buf.len() {
         return None;
     }
-    let s = &buf[*off..*off + len];
-    *off += len;
+    let s = &buf[*off..end];
+    *off = end;
     Some(s)
 }
 
@@ -545,7 +660,7 @@ fn decode_chrome_encoded_text(raw: &[u8]) -> String {
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .map(|&c| u16::from_le_bytes(c))
                 .collect();
             String::from_utf16_lossy(&units)
         }
@@ -556,6 +671,20 @@ fn decode_chrome_encoded_text(raw: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_varint64(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                b |= 0x80;
+            }
+            out.push(b);
+            if v == 0 {
+                break;
+            }
+        }
+    }
 
     #[test]
     fn test_decode_chromium_156_leveldb_wal_record() {
@@ -568,5 +697,43 @@ mod tests {
                 .and_then(|v| v.as_deref()),
             Some("forensic_value")
         );
+    }
+
+    #[test]
+    fn test_leveldb_snappy_oom_varint_overflow_and_utf16_odd() {
+        // 1. Snappy 5-byte varint declaring 2 GiB uncompressed length must reject cleanly without OOM
+        let mut file = vec![0x80, 0x80, 0x80, 0x80, 0x08]; // snappy decompress_len = 2^31
+        let raw_len = file.len();
+        file.extend_from_slice(&[1, 0, 0, 0, 0]); // trailer: type=1 (snappy), crc=0
+        assert!(read_ldb_block(&file, 0, raw_len).is_none());
+
+        // 2. read_varint_slice overflow (varint = u64::MAX)
+        let max_varint = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+        let mut off = 0usize;
+        assert!(read_varint_slice(&max_varint, &mut off).is_none());
+
+        // 3. iter_ldb_block varint overflow + valid num_restarts footer
+        let mut blk = max_varint.to_vec();
+        blk.extend_from_slice(&0u32.to_le_bytes()); // num_restarts = 0
+        assert!(iter_ldb_block(&blk).is_empty());
+
+        // 4. Shared-prefix amplification guard in iter_ldb_block
+        let mut amp = Vec::new();
+        encode_varint64(0, &mut amp);
+        encode_varint64(1024, &mut amp);
+        encode_varint64(0, &mut amp);
+        amp.extend_from_slice(&vec![b'A'; 1024]);
+        for _ in 0..80_000 {
+            encode_varint64(1024, &mut amp);
+            encode_varint64(0, &mut amp);
+            encode_varint64(0, &mut amp);
+        }
+        amp.extend_from_slice(&0u32.to_le_bytes());
+        let decoded_entries = iter_ldb_block(&amp);
+        assert!(decoded_entries.len() < 80_000);
+
+        // 5. UTF-16LE odd-byte tail must not panic
+        let s = decode_chrome_encoded_text(b"\x00h\x00i\x00x");
+        assert_eq!(s, "hi");
     }
 }

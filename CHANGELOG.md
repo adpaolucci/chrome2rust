@@ -15,8 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model Context Protocol Server (`chrome2rust-mcp` & `chrome2rust mcp`)**: JSON-RPC 2.0 MCP server exposing Chrome profile discovery, cache scanning/inspection/extraction, `User Data` forensic analysis, and offline report generation tools to AI workflows.
 - **Chain-of-Custody Audit Manifests (`chrome2rust-forensics::custody`)**: SHA-256 Merkle root and cryptographic artifact hash manifest generation in JSON/CSV formats (`--audit-manifest`).
 - **Native OS File/Folder Pickers & Format Sniffer**: Added `chrome2rust pick`, global `--pick`/`--browse` flag, and `chrome2rust sniff` artifact classifier.
+- **Deep Magic Signature & Extension Recovery (`chrome2rust-core::magic`)**: Expanded content identification across 60+ binary signatures (PE/ELF/Mach-O, WOFF/WOFF2/TTF/OTF, MP4/MOV/WEBM/AVIF/HEIC, MP3/FLAC/OGG/WAV, PDF/OLE2/OOXML/ZIP/7z/RAR/GZIP/ZSTD/XZ, WebP/PNG/JPEG/GIF/ICO/BMP, SQLite/WASMs), container inspection, text heuristics (`html`/`svg`/`xml`/`json`/`css`/`js`), `Content-Disposition` filename recovery, HTTP `Content-Type` vs. magic mismatch findings (`MIME Mismatch` column + `--use-detected-ext` extraction mode).
 - **Structured `tracing` Logging & Signal Handling**: Added `--log-level` / `--log-file` structured stderr/file logging and clean `SIGINT` handling.
 - **CI, Release Workflows & Governance Docs**: Added cross-platform GitHub Actions CI (`ubuntu-latest`, `windows-latest`, `macos-latest`), automated binary Release packaging, `rustfmt.toml`, `.cargo/config.toml`, `.gitattributes`, `CONTRIBUTING.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md`.
+
+### Fixed & Hardened
+- **Security Audit & Deep Fuzz Testing Hardening**: Hardened Simple Cache, Blockfile Cache, `HttpResponseInfo` pickle, `gzip`/`deflate`/`br`/`zstd` decompression bombs, LevelDB `.ldb`/`.log`, SNSS `Session`/`Tabs`, SQLite `History` deletion-gap arithmetic, filename/path sanitization (including Windows reserved device names), X.509/crypto helpers, and MCP JSON-RPC framing against malformed, truncated, or adversarial inputs.
 
 ## [0.1.0] - 2026-11-14
 

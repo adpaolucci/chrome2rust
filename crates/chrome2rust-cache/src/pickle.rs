@@ -63,6 +63,7 @@ pub struct HttpResponseMetadata {
     pub content_type: Option<String>,
     pub raw_content_type: Option<String>,
     pub content_encoding: Option<String>,
+    pub content_disposition_filename: Option<String>,
     pub server_name: Option<String>,
     pub server_time: Option<DateTime<Utc>>,
     pub last_modified: Option<DateTime<Utc>>,
@@ -114,8 +115,11 @@ impl<'a> PickleReader<'a> {
 
     fn read_bytes_aligned(&mut self) -> Option<&'a [u8]> {
         let len = self.read_u32()? as usize;
-        let aligned = len.div_ceil(4) * 4;
-        if len > 16 * 1024 * 1024 || self.remaining() < aligned {
+        if len > 16 * 1024 * 1024 {
+            return None;
+        }
+        let aligned = len.div_ceil(4).checked_mul(4)?;
+        if self.remaining() < aligned {
             // If exact len fits at end without trailing padding
             if len <= self.remaining() {
                 let slice = &self.buf[self.off..self.off + len];
@@ -177,15 +181,21 @@ pub fn parse_http_response_info(stream0: &[u8]) -> HttpResponseMetadata {
     // right before the HTTP headers string length. Verify cleanly by checking whether `offset + 8`
     // holds a length prefix pointing at "HTTP/" (or whether `offset` itself holds "HTTP/").
     let looks_like_headers_at = |off: usize| -> bool {
-        if off + 8 >= stream0.len() {
+        let Some(min_end) = off.checked_add(8) else {
+            return false;
+        };
+        if min_end >= stream0.len() {
             return false;
         }
         let hlen = u32::from_le_bytes(stream0[off..off + 4].try_into().unwrap_or([0; 4])) as usize;
-        (8..=256 * 1024).contains(&hlen) && off + 4 + hlen <= stream0.len() && stream0[off + 4..].starts_with(b"HTTP/")
+        let Some(end) = off.checked_add(4).and_then(|s| s.checked_add(hlen)) else {
+            return false;
+        };
+        (8..=256 * 1024).contains(&hlen) && end <= stream0.len() && stream0[off + 4..].starts_with(b"HTTP/")
     };
 
     if !looks_like_headers_at(r.off)
-        && looks_like_headers_at(r.off + 8)
+        && r.off.checked_add(8).is_some_and(looks_like_headers_at)
         && let Some(orig_us) = r.read_i64()
     {
         meta.original_response_time = chrome_us_to_datetime(orig_us);
@@ -342,9 +352,14 @@ fn parse_raw_http_headers(raw: &[u8], meta: &mut HttpResponseMetadata) {
             match lower.as_str() {
                 "content-type" => {
                     meta.raw_content_type = Some(val_trim.clone());
-                    let main_ct = val_trim.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-                    if !main_ct.is_empty() {
-                        meta.content_type = Some(main_ct);
+                    if let Some(norm) = chrome2rust_core::magic::normalize_mime(&val_trim) {
+                        meta.content_type = Some(norm);
+                    }
+                }
+                "content-disposition" => {
+                    if meta.content_disposition_filename.is_none() {
+                        meta.content_disposition_filename =
+                            chrome2rust_core::magic::parse_content_disposition_filename(&val_trim);
                     }
                 }
                 "content-encoding" => {
@@ -370,7 +385,7 @@ fn parse_raw_http_headers(raw: &[u8], meta: &mut HttpResponseMetadata) {
                     for directive in val_trim.split(',') {
                         let d = directive.trim().to_ascii_lowercase();
                         if let Some(age_str) = d.strip_prefix("max-age=")
-                            && let Ok(secs) = age_str.trim().parse::<i64>()
+                            && let Ok(secs) = age_str.trim().trim_matches('"').parse::<i64>()
                         {
                             max_age_secs = Some(secs);
                         }
@@ -389,8 +404,10 @@ fn parse_raw_http_headers(raw: &[u8], meta: &mut HttpResponseMetadata) {
 
     if let Some(max_age) = max_age_secs {
         let base = date_header.or(meta.response_time);
-        if let Some(b) = base {
-            meta.expiration_time = Some(b + Duration::seconds(max_age));
+        if let Some(b) = base
+            && let Some(delta) = Duration::try_seconds(max_age)
+        {
+            meta.expiration_time = b.checked_add_signed(delta);
         }
     } else if let Some(exp) = expires_header {
         meta.expiration_time = Some(exp);
@@ -398,6 +415,9 @@ fn parse_raw_http_headers(raw: &[u8], meta: &mut HttpResponseMetadata) {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
@@ -425,5 +445,45 @@ mod tests {
         assert!(meta.response_time.is_some());
         assert!(meta.original_response_time.is_some());
         assert!(meta.expiration_time.is_some());
+    }
+
+    #[test]
+    fn test_pickle_max_age_overflow_and_large_len() {
+        // Huge max-age (i64::MAX) and quoted max-age must never panic
+        let headers_big =
+            b"HTTP/1.1 200 OK\0Date: Sun, 15 Nov 2026 00:00:00 GMT\0Cache-Control: max-age=9223372036854775807\0\0";
+        let mut s0 = Vec::new();
+        s0.extend_from_slice(&0u32.to_le_bytes());
+        s0.extend_from_slice(&3u32.to_le_bytes());
+        s0.extend_from_slice(&0i64.to_le_bytes());
+        s0.extend_from_slice(&0i64.to_le_bytes());
+        s0.extend_from_slice(&(headers_big.len() as u32).to_le_bytes());
+        s0.extend_from_slice(headers_big);
+        let meta = parse_http_response_info(&s0);
+        assert_eq!(meta.status_code, Some(200));
+        assert!(meta.expiration_time.is_none());
+
+        // Quoted max-age="3600"
+        let headers_quoted =
+            b"HTTP/1.1 200 OK\0Date: Sun, 15 Nov 2026 00:00:00 GMT\0Cache-Control: max-age=\"3600\"\0\0";
+        let mut s0_q = Vec::new();
+        s0_q.extend_from_slice(&0u32.to_le_bytes());
+        s0_q.extend_from_slice(&3u32.to_le_bytes());
+        s0_q.extend_from_slice(&0i64.to_le_bytes());
+        s0_q.extend_from_slice(&0i64.to_le_bytes());
+        s0_q.extend_from_slice(&(headers_quoted.len() as u32).to_le_bytes());
+        s0_q.extend_from_slice(headers_quoted);
+        let meta_q = parse_http_response_info(&s0_q);
+        assert!(meta_q.expiration_time.is_some());
+
+        // Pickle aligned length = u32::MAX must fail cleanly
+        let mut s0_max = Vec::new();
+        s0_max.extend_from_slice(&0u32.to_le_bytes());
+        s0_max.extend_from_slice(&3u32.to_le_bytes());
+        s0_max.extend_from_slice(&0i64.to_le_bytes());
+        s0_max.extend_from_slice(&0i64.to_le_bytes());
+        s0_max.extend_from_slice(&u32::MAX.to_le_bytes());
+        let meta_max = parse_http_response_info(&s0_max);
+        assert_eq!(meta_max.status_code, None);
     }
 }

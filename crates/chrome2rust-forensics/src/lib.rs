@@ -223,8 +223,7 @@ pub fn analyze_user_data(path: &Path, opts: &AnalysisOptions) -> UserDataReport 
         for c in &p.cache_entries {
             summary.total_cache_bytes += c.file_size as u64;
             let cat = c
-                .content_type
-                .as_deref()
+                .effective_content_type()
                 .and_then(|ct| ct.split('/').next())
                 .unwrap_or("unknown")
                 .to_string();

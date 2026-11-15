@@ -1,11 +1,13 @@
-use super::decompress::decompress_payload;
+use super::decompress::decompress_payload_for_type;
 use super::pickle::{HttpResponseMetadata, parse_http_response_info};
 use super::{BlockfileDataLocation, CacheBackendKind, CacheEntry, CacheLocationRef, CacheScanOptions, hex_lower};
 use chrome2rust_core::error::{ChromeError, DiagnosticWarning};
+use chrome2rust_core::magic::{ContentDetection, detect_content};
 use chrome2rust_core::time::{chrome_us_to_datetime, system_time_to_utc};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const INDEX_MAGIC: u32 = 0xc103cac3;
@@ -271,22 +273,60 @@ pub fn scan_blockfile_cache(dir: &Path, opts: &CacheScanOptions) -> (Vec<CacheEn
                     None
                 };
 
+                let (parsed_url, _, _) = super::parse_cache_key(&raw_key);
                 let mut file_size = s1_len;
                 let mut payload_sha256 = None;
+                let mut detection = ContentDetection::default();
+                let mut detection_done = false;
+
                 if let Some(ref loc_b) = stream1_loc
                     && !deleted_file
-                    && (opts.decompress_sizes || opts.compute_hashes)
-                    && s1_len <= 16 * 1024 * 1024
-                    && let Ok(raw_payload) = read_blockfile_data(dir, loc_b)
                 {
-                    let decompressed = match decompress_payload(&raw_payload, http_meta.content_encoding.as_deref()) {
-                        Ok(v) => v,
-                        Err(_) => raw_payload,
-                    };
-                    file_size = decompressed.len();
-                    if opts.compute_hashes && !decompressed.is_empty() {
-                        payload_sha256 = Some(hex_lower(&Sha256::digest(&decompressed)));
+                    if (opts.decompress_sizes || opts.compute_hashes)
+                        && s1_len <= 16 * 1024 * 1024
+                        && let Ok(raw_payload) = read_blockfile_data(dir, loc_b)
+                    {
+                        let decompressed = match decompress_payload_for_type(
+                            &raw_payload,
+                            http_meta.content_encoding.as_deref(),
+                            http_meta.content_type.as_deref(),
+                        ) {
+                            Ok(v) => v,
+                            Err(_) => raw_payload,
+                        };
+                        file_size = decompressed.len();
+                        if opts.compute_hashes && !decompressed.is_empty() {
+                            payload_sha256 = Some(hex_lower(&Sha256::digest(&decompressed)));
+                        }
+                        detection = detect_content(
+                            &decompressed[..decompressed.len().min(64 * 1024)],
+                            http_meta.content_type.as_deref(),
+                            Some(&parsed_url),
+                            http_meta.content_disposition_filename.as_deref(),
+                        );
+                        detection_done = true;
+                    } else if http_meta
+                        .content_encoding
+                        .as_deref()
+                        .is_none_or(|e| e.trim().is_empty() || e.eq_ignore_ascii_case("identity"))
+                        && let Ok(prefix) = read_blockfile_prefix(dir, loc_b, 64 * 1024)
+                    {
+                        detection = detect_content(
+                            &prefix,
+                            http_meta.content_type.as_deref(),
+                            Some(&parsed_url),
+                            http_meta.content_disposition_filename.as_deref(),
+                        );
+                        detection_done = true;
                     }
+                }
+                if !detection_done {
+                    detection = detect_content(
+                        &[],
+                        http_meta.content_type.as_deref(),
+                        Some(&parsed_url),
+                        http_meta.content_disposition_filename.as_deref(),
+                    );
                 }
 
                 let loc = CacheLocationRef {
@@ -314,6 +354,7 @@ pub fn scan_blockfile_cache(dir: &Path, opts: &CacheScanOptions) -> (Vec<CacheEn
                     deleted_file,
                     None,
                     payload_sha256,
+                    detection,
                     loc,
                 );
                 entries.push(entry);
@@ -332,13 +373,15 @@ fn read_addr_slice(block_files: &HashMap<u8, BlockFile>, addr: DecodedAddr, exac
     }
     let bf = block_files.get(&addr.file_number)?;
     let block_size = addr.block_size().unwrap_or(bf.entry_size);
-    let start = BLOCK_HEADER_SIZE + (addr.start_block as usize) * block_size;
-    let total_alloc = addr.num_blocks * block_size;
+    let block_offset = (addr.start_block as usize).checked_mul(block_size)?;
+    let start = BLOCK_HEADER_SIZE.checked_add(block_offset)?;
+    let total_alloc = addr.num_blocks.checked_mul(block_size)?;
     let len = exact_len.unwrap_or(total_alloc).min(total_alloc);
-    if start + len > bf.data.len() {
+    let end = start.checked_add(len)?;
+    if end > bf.data.len() {
         return None;
     }
-    Some(&bf.data[start..start + len])
+    Some(&bf.data[start..end])
 }
 
 fn read_stream_bytes(
@@ -364,6 +407,37 @@ fn read_stream_bytes(
     let slice = read_addr_slice(block_files, addr, Some(byte_len))
         .ok_or_else(|| ChromeError::InvalidFormat(format!("Blockfile address out of bounds: {:#x}", addr.raw)))?;
     Ok(slice.to_vec())
+}
+
+fn read_blockfile_prefix(
+    cache_dir: &Path,
+    loc: &BlockfileDataLocation,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ChromeError> {
+    match loc {
+        BlockfileDataLocation::SeparateFile { path, byte_len } => {
+            if !path.is_file() {
+                return Err(ChromeError::NotFound(path.display().to_string()));
+            }
+            let take = (*byte_len).min(max_bytes);
+            let mut f = std::fs::File::open(path).map_err(|e| ChromeError::Io {
+                path: path.display().to_string(),
+                source: e,
+            })?;
+            let mut buf = vec![0u8; take];
+            let n = f.read(&mut buf).map_err(|e| ChromeError::Io {
+                path: path.display().to_string(),
+                source: e,
+            })?;
+            buf.truncate(n);
+            Ok(buf)
+        }
+        BlockfileDataLocation::Block { byte_len, .. } => {
+            let mut full = read_blockfile_data(cache_dir, loc)?;
+            full.truncate((*byte_len).min(max_bytes));
+            Ok(full)
+        }
+    }
 }
 
 pub fn read_blockfile_data(cache_dir: &Path, loc: &BlockfileDataLocation) -> Result<Vec<u8>, ChromeError> {
@@ -392,8 +466,15 @@ pub fn read_blockfile_data(cache_dir: &Path, loc: &BlockfileDataLocation) -> Res
                 path: file_path.display().to_string(),
                 source: e,
             })?;
-            let start = BLOCK_HEADER_SIZE + (*start_block as usize) * (*block_size);
-            let end = start + *byte_len;
+            let block_offset = (*start_block as usize)
+                .checked_mul(*block_size)
+                .ok_or_else(|| ChromeError::InvalidFormat("Blockfile offset overflow".into()))?;
+            let start = BLOCK_HEADER_SIZE
+                .checked_add(block_offset)
+                .ok_or_else(|| ChromeError::InvalidFormat("Blockfile start overflow".into()))?;
+            let end = start
+                .checked_add(*byte_len)
+                .ok_or_else(|| ChromeError::InvalidFormat("Blockfile end overflow".into()))?;
             if end > bytes.len() {
                 return Err(ChromeError::InvalidFormat(format!(
                     "Blockfile slice {start}..{end} exceeds {} ({} bytes)",

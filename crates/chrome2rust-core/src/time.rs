@@ -128,12 +128,13 @@ pub fn parse_relative_duration(spec: &str) -> Result<Duration, String> {
     let val: i64 = num_str
         .parse()
         .map_err(|_| format!("Invalid duration number in '{spec}'"))?;
+    let err_overflow = || format!("Duration value out of range in '{spec}'");
     match unit {
-        "s" | "sec" | "secs" | "second" | "seconds" => Ok(Duration::seconds(val)),
-        "m" | "min" | "mins" | "minute" | "minutes" => Ok(Duration::minutes(val)),
-        "h" | "hr" | "hrs" | "hour" | "hours" => Ok(Duration::hours(val)),
-        "d" | "day" | "days" | "" => Ok(Duration::days(val)),
-        "w" | "wk" | "wks" | "week" | "weeks" => Ok(Duration::weeks(val)),
+        "s" | "sec" | "secs" | "second" | "seconds" => Duration::try_seconds(val).ok_or_else(err_overflow),
+        "m" | "min" | "mins" | "minute" | "minutes" => Duration::try_minutes(val).ok_or_else(err_overflow),
+        "h" | "hr" | "hrs" | "hour" | "hours" => Duration::try_hours(val).ok_or_else(err_overflow),
+        "d" | "day" | "days" | "" => Duration::try_days(val).ok_or_else(err_overflow),
+        "w" | "wk" | "wks" | "week" | "weeks" => Duration::try_weeks(val).ok_or_else(err_overflow),
         _ => Err(format!(
             "Unsupported duration unit '{unit}' in '{spec}' (use s, m, h, d, w)"
         )),
@@ -204,5 +205,7 @@ mod tests {
         assert_eq!(parse_relative_duration("30m").unwrap(), Duration::minutes(30));
         assert_eq!(parse_relative_duration("24h").unwrap(), Duration::hours(24));
         assert_eq!(parse_relative_duration("7d").unwrap(), Duration::days(7));
+        assert!(parse_relative_duration("99999999999999d").is_err());
+        assert!(parse_relative_duration("9223372036854775807s").is_err());
     }
 }

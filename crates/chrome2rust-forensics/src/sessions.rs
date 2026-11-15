@@ -120,15 +120,31 @@ fn parse_snss_file(
         }
     };
 
+    let fname = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    parse_snss_into(&bytes, &fname, dialect, out);
+}
+
+/// Parses an in-memory Chrome SNSS `Session_*` (`is_tabs = false`) or `Tabs_*` (`is_tabs = true`) buffer.
+pub fn parse_snss_bytes(bytes: &[u8], is_tabs: bool) -> SessionsAnalysis {
+    let mut out = SessionsAnalysis::default();
+    let dialect = if is_tabs {
+        SnssDialect::Tabs
+    } else {
+        SnssDialect::Session
+    };
+    parse_snss_into(bytes, "memory.snss", dialect, &mut out);
+    out
+}
+
+fn parse_snss_into(bytes: &[u8], fname: &str, dialect: SnssDialect, out: &mut SessionsAnalysis) {
     if bytes.len() < 8 || &bytes[0..4] != b"SNSS" {
         return;
     }
 
     let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0; 4]));
-    let fname = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
     let file_ts = fname
         .split('_')
         .nth(1)
@@ -141,10 +157,10 @@ fn parse_snss_file(
     let mut tabs: HashMap<i32, SessionTabRecord> = HashMap::new();
     let mut closed_windows: HashMap<i32, bool> = HashMap::new();
 
-    while off + 2 <= bytes.len() {
+    while bytes.len().saturating_sub(off) >= 2 {
         let size = u16::from_le_bytes([bytes[off], bytes[off + 1]]) as usize;
         off += 2;
-        if size == 0 || off + size > bytes.len() {
+        if size == 0 || size > bytes.len().saturating_sub(off) {
             break;
         }
         let cmd_id = bytes[off];
@@ -158,13 +174,13 @@ fn parse_snss_file(
                 0 if payload.len() >= 8 => {
                     let win_id = read_i32(&payload[0..4]);
                     let tab_id = read_i32(&payload[4..8]);
-                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, false));
+                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, false));
                     tab.window_id = Some(win_id);
                 }
                 // kCommandUpdateTabNavigation = 6 (Pickle)
                 6 => {
                     if let Some((tab_id, nav)) = parse_nav_pickle(payload) {
-                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, false));
+                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, false));
                         upsert_nav(tab, nav);
                     }
                 }
@@ -172,7 +188,7 @@ fn parse_snss_file(
                 7 if payload.len() >= 8 => {
                     let tab_id = read_i32(&payload[0..4]);
                     let idx = read_i32(&payload[4..8]);
-                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, false));
+                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, false));
                     tab.selected_nav_index = Some(idx);
                 }
                 // kCommandTabClosed = 12 (tab_id: i32, close_time: i64)
@@ -183,7 +199,7 @@ fn parse_snss_file(
                     } else {
                         None
                     };
-                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, true));
+                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, true));
                     tab.is_closed = true;
                     if close_time.is_some() {
                         tab.timestamp = close_time;
@@ -199,7 +215,7 @@ fn parse_snss_file(
                     let tab_id = read_i32(&payload[0..4]);
                     let ts = chrome_us_to_datetime(read_i64(&payload[8..16]));
                     if let Some(t) = ts {
-                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, false));
+                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, false));
                         tab.timestamp = Some(t);
                     }
                 }
@@ -209,7 +225,7 @@ fn parse_snss_file(
                 // kCommandUpdateTabNavigation = 1 (Pickle)
                 1 => {
                     if let Some((tab_id, nav)) = parse_nav_pickle(payload) {
-                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, true));
+                        let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, true));
                         upsert_nav(tab, nav);
                     }
                 }
@@ -218,7 +234,7 @@ fn parse_snss_file(
                     let tab_id = read_i32(&payload[0..4]);
                     let idx = read_i32(&payload[4..8]);
                     let ts = chrome_us_to_datetime(read_i64(&payload[8..16]));
-                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(&fname, tab_id, true));
+                    let tab = tabs.entry(tab_id).or_insert_with(|| new_tab(fname, tab_id, true));
                     tab.selected_nav_index = Some(idx);
                     if ts.is_some() {
                         tab.timestamp = ts;
@@ -230,7 +246,7 @@ fn parse_snss_file(
     }
 
     out.files_parsed.push(SessionFileMeta {
-        filename: fname,
+        filename: fname.to_string(),
         dialect: match dialect {
             SnssDialect::Session => "Session".into(),
             SnssDialect::Tabs => "Tabs".into(),
@@ -324,38 +340,40 @@ fn read_i32_at(buf: &[u8], off: &mut usize) -> Option<i32> {
 }
 
 fn read_pickle_string(buf: &[u8], off: &mut usize) -> Option<String> {
-    if *off + 4 > buf.len() {
+    if buf.len().saturating_sub(*off) < 4 {
         return None;
     }
     let len = u32::from_le_bytes(buf[*off..*off + 4].try_into().ok()?) as usize;
     *off += 4;
-    if len > 1024 * 1024 || *off + len > buf.len() {
+    let end = off.checked_add(len)?;
+    if len > 1024 * 1024 || end > buf.len() {
         return None;
     }
-    let s = String::from_utf8_lossy(&buf[*off..*off + len]).into_owned();
+    let s = String::from_utf8_lossy(&buf[*off..end]).into_owned();
     let aligned = len.div_ceil(4) * 4;
-    *off = (*off + aligned).min(buf.len());
+    *off = off.saturating_add(aligned).min(buf.len());
     Some(s)
 }
 
 fn read_pickle_string16(buf: &[u8], off: &mut usize) -> Option<String> {
-    if *off + 4 > buf.len() {
+    if buf.len().saturating_sub(*off) < 4 {
         return None;
     }
     let char_len = u32::from_le_bytes(buf[*off..*off + 4].try_into().ok()?) as usize;
     *off += 4;
     let byte_len = char_len.checked_mul(2)?;
-    if byte_len > 1024 * 1024 || *off + byte_len > buf.len() {
+    let end = off.checked_add(byte_len)?;
+    if byte_len > 1024 * 1024 || end > buf.len() {
         return None;
     }
-    let units: Vec<u16> = buf[*off..*off + byte_len]
+    let units: Vec<u16> = buf[*off..end]
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .map(|&c| u16::from_le_bytes(c))
         .collect();
     let s = String::from_utf16_lossy(&units);
     let aligned = byte_len.div_ceil(4) * 4;
-    *off = (*off + aligned).min(buf.len());
+    *off = off.saturating_add(aligned).min(buf.len());
     Some(s)
 }

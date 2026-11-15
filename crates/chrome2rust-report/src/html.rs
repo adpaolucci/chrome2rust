@@ -690,11 +690,29 @@ pre.codebox {
         all.push({ profile: p.profile_name, entry: c });
       }
     }
-    const ctSet = Array.from(new Set(all.map(x => x.entry.content_type).filter(Boolean))).sort();
+    const ctSet = Array.from(new Set(all.flatMap(x => [x.entry.content_type, x.entry.detected_content_type]).filter(Boolean))).sort();
+    const mismatchCount = all.filter(x => x.entry.mime_mismatch).length;
     const filtered = all.filter(x => {
       const c = x.entry;
-      if (state.cacheCtFilter && c.content_type !== state.cacheCtFilter) return false;
-      return matchesSearch([c.url, c.content_type, c.server_name, c.partition_website, c.cache_name, c.server_ip, c.payload_sha256]);
+      if (state.cacheCtFilter === '__MISMATCH__') {
+        if (!c.mime_mismatch) return false;
+      } else if (state.cacheCtFilter && c.content_type !== state.cacheCtFilter && c.detected_content_type !== state.cacheCtFilter) {
+        return false;
+      }
+      return matchesSearch([
+        c.url,
+        c.content_type,
+        c.detected_content_type,
+        c.detected_extension,
+        c.file_signature,
+        c.content_disposition_filename,
+        c.mime_mismatch ? 'mismatch' : '',
+        c.server_name,
+        c.partition_website,
+        c.cache_name,
+        c.server_ip,
+        c.payload_sha256,
+      ]);
     });
 
     const rows = filtered.map(x => {
@@ -702,6 +720,9 @@ pre.codebox {
       return [
         c.url,
         c.content_type || '',
+        c.detected_content_type || '',
+        c.detected_extension || '',
+        c.mime_mismatch ? 'Yes' : 'No',
         c.file_size,
         c.compressed_size,
         fmtDate(c.last_accessed),
@@ -718,30 +739,44 @@ pre.codebox {
       ];
     });
 
+    const mismatchOpt = mismatchCount > 0
+      ? `<option value="__MISMATCH__" ${state.cacheCtFilter === '__MISMATCH__' ? 'selected' : ''}>MIME Mismatches Only (${mismatchCount})</option>`
+      : '';
+
     el.innerHTML = '<div class="subbar">' +
       '<select id="ctSel"><option value="">All Content-Types (' + ctSet.length + ')</option>' +
+      mismatchOpt +
       ctSet.map(ct => `<option value="${esc(ct)}" ${state.cacheCtFilter === ct ? 'selected' : ''}>${esc(ct)}</option>`).join('') +
-      '</select><span style="color:var(--muted);">Click any row to inspect HTTP headers, TLS & certificate details</span></div><div id="cacheTbl"></div>';
+      '</select><span style="color:var(--muted);">Click any row to inspect HTTP headers, file signature, TLS & certificate details</span></div><div id="cacheTbl"></div>';
 
     el.querySelector('#ctSel').addEventListener('change', (e) => {
       state.cacheCtFilter = e.target.value; state.page = 0; render();
     });
 
     const tbl = renderSortableTable(
-      ['URL', 'Content Type', 'Size (B)', 'Compressed', 'Last Accessed', 'Server Time', 'Expires', 'Server', 'Response', 'Encoding', 'Web Site', 'Server IP', 'Deleted', 'Cache Name', 'Backend'],
+      ['URL', 'Content Type', 'Detected Type', 'Detected Ext', 'MIME Mismatch', 'Size (B)', 'Compressed', 'Last Accessed', 'Server Time', 'Expires', 'Server', 'Response', 'Encoding', 'Web Site', 'Server IP', 'Deleted', 'Cache Name', 'Backend'],
       rows,
       {
-        monoCols: [4, 5, 6, 11, 13],
-        breakCols: [0, 10],
+        monoCols: [3, 7, 8, 9, 14, 16],
+        breakCols: [0, 13],
         onRowClick: (ridx) => {
           const item = filtered[ridx]?.entry;
           if (!item) return;
           const hdrs = (item.headers || []).map(h => `${h.name}: ${h.value}`).join('\n');
           const certs = (item.certificates || []).map(c => `Subject: ${c.subject}\nIssuer: ${c.issuer}\nValidity: ${c.not_before} -> ${c.not_after}`).join('\n---\n');
+          const detExt = item.detected_extension ? ` (.${item.detected_extension})` : '';
+          const mismatchHtml = item.mime_mismatch
+            ? `<div style="color:#f87171;"><strong>MIME Mismatch Warning:</strong> Declared Content-Type contradicts detected payload signature</div>`
+            : '';
           openModal(`Cache Entry: ${item.cache_name}`,
             `<div class="mono" style="display:grid;gap:4px;margin-bottom:10px;">
               <div><strong>URL:</strong> ${esc(item.url)}</div>
               <div><strong>Raw Key:</strong> ${esc(item.raw_key)}</div>
+              <div><strong>Declared Content-Type:</strong> ${esc(item.raw_content_type || item.content_type || '-')}</div>
+              <div><strong>Detected Content-Type:</strong> ${esc((item.detected_content_type || '-') + detExt)}</div>
+              <div><strong>File Signature:</strong> ${esc(item.file_signature || '-')}</div>
+              ${item.content_disposition_filename ? `<div><strong>Content-Disposition:</strong> ${esc(item.content_disposition_filename)}</div>` : ''}
+              ${mismatchHtml}
               <div><strong>File Size / Compressed:</strong> ${item.file_size} / ${item.compressed_size} bytes</div>
               <div><strong>SHA-256:</strong> ${esc(item.payload_sha256 || 'Not computed')}</div>
               <div><strong>TLS / ALPN:</strong> ${esc(item.tls_version || '-')} / ${esc(item.alpn_protocol || '-')}</div>

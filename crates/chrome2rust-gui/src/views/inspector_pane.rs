@@ -57,10 +57,18 @@ pub fn render_inspector_pane(ui: &mut egui::Ui, state: &mut AppState) {
                     .inner_margin(egui::Margin::same(5))
                     .show(ui, |ui| {
                         ui.label(RichText::new(&entry.url).size(11.0).strong().color(Color32::BLACK));
+                        let declared_ct = entry.content_type.as_deref().unwrap_or("unknown");
+                        let det_str = match (&entry.detected_content_type, &entry.detected_extension) {
+                            (Some(dt), Some(ext)) => format!("{dt} (.{ext})"),
+                            (Some(dt), None) => dt.clone(),
+                            (None, Some(ext)) => format!(".{ext}"),
+                            (None, None) => "-".to_string(),
+                        };
                         ui.label(
                             RichText::new(format!(
-                                "{} | {} | {} | {}",
-                                entry.content_type.as_deref().unwrap_or("unknown"),
+                                "Declared: {} | Detected: {} | {} | {} | {}",
+                                declared_ct,
+                                det_str,
                                 format_bytes(entry.file_size as u64),
                                 entry.server_response,
                                 entry.cache_name
@@ -68,6 +76,26 @@ pub fn render_inspector_pane(ui: &mut egui::Ui, state: &mut AppState) {
                             .size(10.5)
                             .color(Color32::from_rgb(70, 70, 70)),
                         );
+                        if let Some(sig) = &entry.file_signature {
+                            ui.label(
+                                RichText::new(format!("Signature: {sig}"))
+                                    .size(10.5)
+                                    .color(Color32::from_rgb(60, 60, 60)),
+                            );
+                        }
+                        if let Some(disp) = &entry.content_disposition_filename {
+                            ui.label(
+                                RichText::new(format!("Disposition Filename: {disp}"))
+                                    .size(10.5)
+                                    .color(Color32::from_rgb(60, 60, 60)),
+                            );
+                        }
+                        if entry.mime_mismatch {
+                            ui.colored_label(
+                                Color32::from_rgb(185, 0, 0),
+                                "Warning: Declared Content-Type contradicts detected payload signature",
+                            );
+                        }
                         ui.add_space(2.0);
                         ui.horizontal(|ui| {
                             if ui.small_button("Copy Preview (Ctrl+P)").clicked() {

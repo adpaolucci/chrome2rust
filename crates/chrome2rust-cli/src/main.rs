@@ -9,7 +9,7 @@ use chrome2rust_cache::{
 };
 use chrome2rust_core::crypto::CryptoOptions;
 use chrome2rust_core::discovery::{
-    ArtifactSniffer, DiscoveredBrowser, TargetKind, discover_local_browsers, resolve_target_path,
+    ArtifactFormat, ArtifactSniffer, DiscoveredBrowser, TargetKind, discover_local_browsers, resolve_target_path,
 };
 use chrome2rust_core::logging::init_logging;
 use chrome2rust_core::time::{format_local_opt, format_utc_opt, parse_relative_duration, parse_user_datetime};
@@ -291,7 +291,7 @@ pub struct CacheListArgs {
     #[arg(short = 'f', long, value_enum, default_value_t = CliExportFormat::Table)]
     pub format: CliExportFormat,
 
-    /// Comma-separated list of columns (e.g. url,content-type,size,last-accessed,server,sha256)
+    /// Comma-separated list of columns (e.g. url,content-type,detected-content-type,detected-extension,file-signature,mime-mismatch,size,last-accessed,server,sha256)
     #[arg(long)]
     pub columns: Option<String>,
 
@@ -299,11 +299,11 @@ pub struct CacheListArgs {
     #[arg(short = 'o', long)]
     pub output: Option<PathBuf>,
 
-    /// Primary sort field (url, content-type, size, last-accessed, server-time, created, expires, server, response, website, cache-name)
+    /// Primary sort field (url, content-type, detected-content-type, detected-extension, file-signature, mime-mismatch, size, last-accessed, server-time, created, expires, server, response, website, cache-name)
     #[arg(long, default_value = "last-accessed")]
     pub sort: String,
 
-    /// Sort descending (default true when sorting by time or size unless overridden, false for text)
+    /// Sort descending (default true when sorting by time, size, or mismatch unless overridden, false for text)
     #[arg(long)]
     pub desc: bool,
 
@@ -360,6 +360,10 @@ pub struct CacheExtractArgs {
     /// Save raw compressed payload bytes without gzip/br/zstd/deflate decompression
     #[arg(long)]
     pub no_decompress: bool,
+
+    /// Replace existing filename extensions when magic/heuristic detection identifies a different type
+    #[arg(long)]
+    pub use_detected_ext: bool,
 }
 
 #[derive(Args, Debug)]
@@ -580,7 +584,16 @@ fn cmd_sniff(args: SniffArgs, pick: bool) -> Result<()> {
         bail!("Target path does not exist: {}", target.display());
     }
 
-    let format = ArtifactSniffer::sniff_path(&target);
+    let mut inspection = ArtifactSniffer::inspect_path(&target);
+    if inspection.artifact_format == ArtifactFormat::SimpleCacheEntryFile && inspection.detected_mime.is_none() {
+        let parent = target.parent().unwrap_or_else(|| Path::new("."));
+        if let Ok(Some(entry)) = parse_simple_entry_file(&target, parent, &CacheScanOptions::default()) {
+            inspection.detected_mime = entry.detected_content_type.or(entry.content_type);
+            inspection.suggested_extension = entry.detected_extension;
+            inspection.file_signature = entry.file_signature;
+            inspection.extension_mismatch = entry.mime_mismatch;
+        }
+    }
     let resolved = resolve_target_path(&target);
     let file_bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
 
@@ -591,8 +604,16 @@ fn cmd_sniff(args: SniffArgs, pick: bool) -> Result<()> {
                 "path": target.display().to_string(),
                 "is_dir": target.is_dir(),
                 "file_bytes": file_bytes,
-                "artifact_format": format,
-                "artifact_format_name": format.name(),
+                "artifact_format": inspection.artifact_format,
+                "artifact_format_name": inspection.artifact_format_name,
+                "detected_mime": inspection.detected_mime,
+                "suggested_extension": inspection.suggested_extension,
+                "file_signature": inspection.file_signature,
+                "detection_source": inspection.detection_source,
+                "current_extension": inspection.current_extension,
+                "missing_extension": inspection.missing_extension,
+                "extension_mismatch": inspection.extension_mismatch,
+                "suggested_filename": inspection.suggested_filename,
                 "resolved_target": resolved,
             }))?
         );
@@ -610,7 +631,28 @@ fn cmd_sniff(args: SniffArgs, pick: bool) -> Result<()> {
     if !target.is_dir() {
         println!("Size            : {} ({} bytes)", format_bytes(file_bytes), file_bytes);
     }
-    println!("Detected Format : {}", format.name());
+    println!("Detected Format : {}", inspection.artifact_format_name);
+    if let Some(mime) = &inspection.detected_mime {
+        println!("Detected MIME   : {mime}");
+    }
+    if let Some(ext) = &inspection.suggested_extension {
+        println!("Suggested Ext   : .{ext}");
+    }
+    if let Some(sig) = &inspection.file_signature {
+        println!("File Signature  : {sig}");
+    }
+    if let Some(cur) = &inspection.current_extension {
+        println!("Current Ext     : .{cur}");
+    }
+    if inspection.missing_extension {
+        println!("Missing Ext     : Yes");
+    }
+    if inspection.extension_mismatch {
+        println!("Ext Mismatch    : WARNING - Payload signature contradicts filename extension");
+    }
+    if let Some(name) = &inspection.suggested_filename {
+        println!("Suggested Name  : {name}");
+    }
     println!("Resolved Kind   : {}", default_target_kind_label(&resolved.kind));
     if !resolved.profile_dirs.is_empty() {
         println!("Profiles Found  : {}", resolved.profile_dirs.len());
@@ -698,7 +740,9 @@ fn build_cache_scan_options(f: &CacheFilterArgs, compute_hashes: bool) -> Result
     }
     if let Some(last_spec) = &f.last {
         let dur = parse_relative_duration(last_spec).map_err(|e| anyhow!(e))?;
-        let cutoff = Utc::now() - dur;
+        let cutoff = Utc::now()
+            .checked_sub_signed(dur)
+            .ok_or_else(|| anyhow!("Duration '{last_spec}' exceeds valid timestamp range"))?;
         since = Some(match since {
             Some(existing) => existing.max(cutoff),
             None => cutoff,
@@ -735,7 +779,7 @@ fn parse_columns(spec: Option<&str>) -> Result<Vec<CacheColumn>> {
         }
         let col = CacheColumn::from_name(trimmed).ok_or_else(|| {
             anyhow!(
-                "Unknown cache column '{trimmed}'. Valid columns: url, content-type, size, compressed-size, last-accessed, server-time, created, expires, server, response, encoding, cache-name, url-length, website, frame, server-ip, deleted, sha256, backend"
+                "Unknown cache column '{trimmed}'. Valid columns: url, content-type, detected-content-type, detected-extension, file-signature, mime-mismatch, size, compressed-size, last-accessed, server-time, created, expires, server, response, encoding, cache-name, url-length, website, frame, server-ip, deleted, sha256, backend"
             )
         })?;
         cols.push(col);
@@ -775,6 +819,7 @@ fn cmd_cache_list(args: CacheListArgs, pick: bool, audit_manifest: Option<&Path>
             | CacheSortField::RecordCreatedTime
             | CacheSortField::ExpirationTime
             | CacheSortField::FileSize
+            | CacheSortField::MimeMismatch
     );
     let primary_desc = if args.asc {
         false
@@ -839,6 +884,7 @@ fn cmd_cache_extract(args: CacheExtractArgs, pick: bool, audit_manifest: Option<
         update_modified_time: !args.no_update_mtime,
         new_name_if_exist: !args.overwrite,
         decompress: !args.no_decompress,
+        prefer_detected_extension: args.use_detected_ext,
     };
 
     let summary = extract_cache_entries(&refs, &extract_opts).map_err(|e| anyhow!(e.to_string()))?;
@@ -934,6 +980,21 @@ fn cmd_cache_inspect(args: CacheInspectArgs, pick: bool) -> Result<()> {
             .or(entry.content_type.as_deref())
             .unwrap_or("-")
     );
+    if let Some(det_ct) = &entry.detected_content_type {
+        println!("Detected Type   : {det_ct}");
+    }
+    if let Some(ext) = &entry.detected_extension {
+        println!("Suggested Ext   : .{ext}");
+    }
+    if let Some(sig) = &entry.file_signature {
+        println!("File Signature  : {sig}");
+    }
+    if let Some(disp) = &entry.content_disposition_filename {
+        println!("Disposition File: {disp}");
+    }
+    if entry.mime_mismatch {
+        println!("MIME Mismatch   : WARNING - Declared Content-Type contradicts detected payload");
+    }
     println!(
         "Encoding        : {}",
         entry.content_encoding.as_deref().unwrap_or("identity")

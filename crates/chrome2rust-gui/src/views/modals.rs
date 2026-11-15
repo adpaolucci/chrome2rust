@@ -19,7 +19,7 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                 .open(&mut is_open)
                 .collapsible(false)
                 .resizable(false)
-                .fixed_size(Vec2::new(540.0, 290.0))
+                .fixed_size(Vec2::new(540.0, 315.0))
                 .show(ctx, |ui| {
                     win32_groupbox(ui, "Destination Folder", |ui| {
                         ui.horizontal(|ui| {
@@ -77,6 +77,10 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                             &mut state.extract_dlg.decompress,
                             "Automatically decompress gzip / deflate / br / zstd payloads",
                         );
+                        ui.checkbox(
+                            &mut state.extract_dlg.prefer_detected_extension,
+                            "Replace mismatched filename extension with payload-detected extension",
+                        );
                     });
 
                     ui.add_space(8.0);
@@ -96,6 +100,7 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                                 update_modified_time: state.extract_dlg.update_mtime,
                                 new_name_if_exist: state.extract_dlg.new_name_if_exist,
                                 decompress: state.extract_dlg.decompress,
+                                prefer_detected_extension: state.extract_dlg.prefer_detected_extension,
                             };
                             match extract_cache_entries(&refs, &opts) {
                                 Ok(sum) => {
@@ -253,40 +258,21 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                 .open(&mut is_open)
                 .collapsible(false)
                 .resizable(false)
-                .fixed_size(Vec2::new(340.0, 440.0))
+                .fixed_size(Vec2::new(340.0, 480.0))
                 .show(ctx, |ui| {
                     win32_groupbox(ui, "Visible Cache Table Columns", |ui| {
-                        let all_cols = [
-                            CacheColumn::Url,
-                            CacheColumn::ContentType,
-                            CacheColumn::FileSize,
-                            CacheColumn::CompressedSize,
-                            CacheColumn::LastAccessed,
-                            CacheColumn::ServerTime,
-                            CacheColumn::RecordCreatedTime,
-                            CacheColumn::ExpirationTime,
-                            CacheColumn::ServerName,
-                            CacheColumn::ServerResponse,
-                            CacheColumn::ContentEncoding,
-                            CacheColumn::CacheName,
-                            CacheColumn::UrlLength,
-                            CacheColumn::WebSite,
-                            CacheColumn::Frame,
-                            CacheColumn::ServerIp,
-                            CacheColumn::DeletedFile,
-                            CacheColumn::Sha256,
-                            CacheColumn::Backend,
-                        ];
-                        for col in all_cols {
-                            let mut checked = state.active_cache_columns.contains(&col);
-                            if ui.checkbox(&mut checked, col.header()).changed() {
-                                if checked {
-                                    state.active_cache_columns.push(col);
-                                } else if state.active_cache_columns.len() > 1 {
-                                    state.active_cache_columns.retain(|c| *c != col);
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            for col in CacheColumn::all_columns() {
+                                let mut checked = state.active_cache_columns.contains(&col);
+                                if ui.checkbox(&mut checked, col.header()).changed() {
+                                    if checked {
+                                        state.active_cache_columns.push(col);
+                                    } else if state.active_cache_columns.len() > 1 {
+                                        state.active_cache_columns.retain(|c| *c != col);
+                                    }
                                 }
                             }
-                        }
+                        });
                     });
                     ui.add_space(8.0);
                     ui.separator();
@@ -318,6 +304,30 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let sha = entry.compute_sha256().unwrap_or_else(|| "-".into());
+                        let det_ct = entry.detected_content_type.as_deref().unwrap_or("-");
+                        let det_ext = entry
+                            .detected_extension
+                            .as_deref()
+                            .map(|e| format!(".{e}"))
+                            .unwrap_or_else(|| "-".to_string());
+                        let sig = entry.file_signature.as_deref().unwrap_or("-");
+                        let disp = entry.content_disposition_filename.as_deref().unwrap_or("-");
+                        let mismatch_str = if entry.mime_mismatch {
+                            "YES - Declared Content-Type contradicts detected payload"
+                        } else {
+                            "No"
+                        };
+                        let decomp_sz = format!("{} bytes", entry.file_size);
+                        let comp_sz = format!("{} bytes", entry.compressed_size);
+                        let last_acc = format_local_opt(entry.last_accessed, true);
+                        let srv_time = format_local_opt(entry.server_time, false);
+                        let cre_time = format_local_opt(entry.record_created_time, true);
+                        let exp_time = format_local_opt(entry.expiration_time, false);
+                        let tls_alpn = format!(
+                            "{} / {}",
+                            entry.tls_version.as_deref().unwrap_or("-"),
+                            entry.alpn_protocol.as_deref().unwrap_or("-")
+                        );
                         win32_groupbox(ui, "Cache Entry Metadata", |ui| {
                             for (k, v) in [
                                 ("URL", entry.url.as_str()),
@@ -326,27 +336,33 @@ pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
                                 ("Frame", entry.partition_frame.as_deref().unwrap_or("-")),
                                 ("Backend", entry.backend.as_str()),
                                 ("Cache File", entry.cache_file_path.as_str()),
-                                ("Content-Type", entry.raw_content_type.as_deref().unwrap_or("-")),
-                                ("Encoding", entry.content_encoding.as_deref().unwrap_or("identity")),
-                                ("Decompressed Size", &format!("{} bytes", entry.file_size)),
-                                ("Compressed Size", &format!("{} bytes", entry.compressed_size)),
-                                ("SHA-256", &sha),
-                                ("Last Accessed", &format_local_opt(entry.last_accessed, true)),
-                                ("Server Time", &format_local_opt(entry.server_time, false)),
-                                ("Created Time", &format_local_opt(entry.record_created_time, true)),
-                                ("Expiration Time", &format_local_opt(entry.expiration_time, false)),
                                 (
-                                    "TLS / ALPN",
-                                    &format!(
-                                        "{} / {}",
-                                        entry.tls_version.as_deref().unwrap_or("-"),
-                                        entry.alpn_protocol.as_deref().unwrap_or("-")
-                                    ),
+                                    "Declared Content-Type",
+                                    entry.raw_content_type.as_deref().unwrap_or("-"),
                                 ),
+                                ("Detected Type", det_ct),
+                                ("Suggested Ext", det_ext.as_str()),
+                                ("File Signature", sig),
+                                ("Disposition File", disp),
+                                ("MIME Mismatch", mismatch_str),
+                                ("Encoding", entry.content_encoding.as_deref().unwrap_or("identity")),
+                                ("Decompressed Size", decomp_sz.as_str()),
+                                ("Compressed Size", comp_sz.as_str()),
+                                ("SHA-256", sha.as_str()),
+                                ("Last Accessed", last_acc.as_str()),
+                                ("Server Time", srv_time.as_str()),
+                                ("Created Time", cre_time.as_str()),
+                                ("Expiration Time", exp_time.as_str()),
+                                ("TLS / ALPN", tls_alpn.as_str()),
                             ] {
                                 ui.horizontal(|ui| {
                                     ui.strong(format!("{k}:"));
-                                    ui.label(RichText::new(v).monospace().size(11.0));
+                                    let color = if k == "MIME Mismatch" && entry.mime_mismatch {
+                                        Color32::from_rgb(185, 0, 0)
+                                    } else {
+                                        Color32::BLACK
+                                    };
+                                    ui.label(RichText::new(v).monospace().size(11.0).color(color));
                                 });
                             }
                         });

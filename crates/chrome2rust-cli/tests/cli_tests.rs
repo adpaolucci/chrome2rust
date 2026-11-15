@@ -292,3 +292,172 @@ fn test_cli_cache_analyze_report_sniff_and_custody() {
     assert!(real_del.status.success());
     assert!(!ud.join("Default/Cache/Cache_Data/eeeeffff00001111_0").exists());
 }
+
+#[test]
+fn test_cli_sniff_and_extract_missing_or_mismatched_extensions() {
+    let work = TempDir::new().unwrap();
+
+    // 1. Sniff extensionless WebP payload
+    let webp_file = work.path().join("payload_blob");
+    std::fs::write(&webp_file, b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00DATA").unwrap();
+    let sn_webp = bin().args(["sniff", "--json"]).arg(&webp_file).output().unwrap();
+    assert!(sn_webp.status.success());
+    let sn_webp_json: serde_json::Value = serde_json::from_slice(&sn_webp.stdout).unwrap();
+    assert_eq!(sn_webp_json["artifact_format"], "CachedPayloadFile");
+    assert_eq!(sn_webp_json["detected_mime"], "image/webp");
+    assert_eq!(sn_webp_json["suggested_extension"], "webp");
+    assert_eq!(sn_webp_json["missing_extension"], true);
+    assert_eq!(sn_webp_json["extension_mismatch"], false);
+    assert_eq!(sn_webp_json["suggested_filename"], "payload_blob.webp");
+
+    // 2. Sniff masqueraded PE executable disguised as avatar.png
+    let mut pe = vec![0u8; 128];
+    pe[0..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&64u32.to_le_bytes());
+    pe[64..68].copy_from_slice(b"PE\0\0");
+    let fake_png = work.path().join("avatar.png");
+    std::fs::write(&fake_png, &pe).unwrap();
+    let sn_pe = bin().args(["sniff", "--json"]).arg(&fake_png).output().unwrap();
+    assert!(sn_pe.status.success());
+    let sn_pe_json: serde_json::Value = serde_json::from_slice(&sn_pe.stdout).unwrap();
+    assert_eq!(sn_pe_json["current_extension"], "png");
+    assert_eq!(sn_pe_json["suggested_extension"], "exe");
+    assert_eq!(sn_pe_json["extension_mismatch"], true);
+    assert_eq!(sn_pe_json["suggested_filename"], "avatar.exe");
+
+    // 3. Build cache directory with challenging missing/ambiguous/spoofed extension entries
+    let cache_dir = work.path().join("Cache_Data");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    // Server script endpoint returning PNG
+    write_simple_entry(
+        &cache_dir.join("0000000000000001_0"),
+        "https://example.org/image.php",
+        "HTTP/1.1 200 OK\0Content-Type: application/octet-stream\0\0",
+        b"\x89PNG\r\n\x1a\nMOCKPNG",
+        "93.184.216.34",
+        443,
+    );
+
+    // Dotted versioned JS asset with missing Content-Type
+    write_simple_entry(
+        &cache_dir.join("0000000000000002_0"),
+        "https://cdn.example.org/js/jquery-3.7.1",
+        "HTTP/1.1 200 OK\0\0",
+        b"'use strict';\nexport default function jq(){return 1;}",
+        "93.184.216.35",
+        443,
+    );
+
+    // Root hostname URL with HTML payload and no Content-Type
+    write_simple_entry(
+        &cache_dir.join("0000000000000003_0"),
+        "https://home.example.org/",
+        "HTTP/1.1 200 OK\0\0",
+        b"<!DOCTYPE html><html><title>Home</title></html>",
+        "93.184.216.36",
+        443,
+    );
+
+    // Proxy resize endpoint with ?format=webp and WebP payload
+    write_simple_entry(
+        &cache_dir.join("0000000000000004_0"),
+        "https://img.example.org/resize?id=9&format=webp",
+        "HTTP/1.1 200 OK\0\0",
+        b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00WEBP",
+        "93.184.216.37",
+        443,
+    );
+
+    // Content-Disposition filename on generic download endpoint
+    write_simple_entry(
+        &cache_dir.join("0000000000000005_0"),
+        "https://files.example.org/download?id=55",
+        "HTTP/1.1 200 OK\0Content-Disposition: attachment; filename=\"quarterly-audit.pdf\"\0\0",
+        b"%PDF-1.7\n%mock\n",
+        "93.184.216.38",
+        443,
+    );
+
+    // Spoofed image/png wrapping PE executable
+    write_simple_entry(
+        &cache_dir.join("0000000000000006_0"),
+        "https://bad.example.org/icon.png",
+        "HTTP/1.1 200 OK\0Content-Type: image/png\0\0",
+        &pe,
+        "93.184.216.39",
+        443,
+    );
+
+    // Verify CSV listing includes new columns and detects mismatch
+    let list_csv = bin()
+        .args(["cache", "list"])
+        .arg(&cache_dir)
+        .args([
+            "-f",
+            "csv",
+            "--columns",
+            "url,content-type,detected-content-type,detected-extension,file-signature,mime-mismatch",
+            "--sort",
+            "mime-mismatch",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        list_csv.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&list_csv.stderr)
+    );
+    let csv_txt = String::from_utf8_lossy(&list_csv.stdout);
+    assert!(csv_txt.contains("Detected Type,Detected Ext,File Signature,MIME Mismatch"));
+    assert!(csv_txt.contains("application/vnd.microsoft.portable-executable,exe,Windows PE32 Executable,Yes"));
+
+    // Verify `cache inspect` surfaces detection fields
+    let insp = bin()
+        .args(["cache", "inspect"])
+        .arg(cache_dir.join("0000000000000006_0"))
+        .output()
+        .unwrap();
+    assert!(insp.status.success());
+    let insp_txt = String::from_utf8_lossy(&insp.stdout);
+    assert!(insp_txt.contains("Detected Type   : application/vnd.microsoft.portable-executable"));
+    assert!(insp_txt.contains("Suggested Ext   : .exe"));
+    assert!(insp_txt.contains("MIME Mismatch   : WARNING"));
+
+    // Extract default (preserves spoofed URL extension .png, recovers missing extensions on others)
+    let out_default = TempDir::new().unwrap();
+    let ext1 = bin()
+        .args(["cache", "extract"])
+        .arg(&cache_dir)
+        .args(["-o"])
+        .arg(out_default.path())
+        .args(["--website-dirs"])
+        .output()
+        .unwrap();
+    assert!(ext1.status.success());
+    assert!(out_default.path().join("example.org/image.php.png").is_file());
+    assert!(out_default.path().join("cdn.example.org/js/jquery-3.7.1.js").is_file());
+    assert!(out_default.path().join("home.example.org/index.html").is_file());
+    assert!(out_default.path().join("img.example.org/resize.webp").is_file());
+    assert!(
+        out_default
+            .path()
+            .join("files.example.org/quarterly-audit.pdf")
+            .is_file()
+    );
+    assert!(out_default.path().join("bad.example.org/icon.png").is_file());
+
+    // Extract with --use-detected-ext (replaces spoofed .png with .exe)
+    let out_forced = TempDir::new().unwrap();
+    let ext2 = bin()
+        .args(["cache", "extract"])
+        .arg(&cache_dir)
+        .args(["-o"])
+        .arg(out_forced.path())
+        .args(["--website-dirs", "--use-detected-ext"])
+        .output()
+        .unwrap();
+    assert!(ext2.status.success());
+    assert!(out_forced.path().join("bad.example.org/icon.exe").is_file());
+    assert!(!out_forced.path().join("bad.example.org/icon.png").exists());
+}

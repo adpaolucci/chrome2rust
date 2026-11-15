@@ -431,7 +431,7 @@ pub fn parse_history(profile_dir: &Path, warnings: &mut Vec<DiagnosticWarning>) 
         out.deletion_indicators.urls_min_id = min_id;
         out.deletion_indicators.urls_max_id = max_id;
         out.deletion_indicators.urls_sqlite_seq = seq;
-        out.deletion_indicators.urls_estimated_deleted = (high - cnt).max(0);
+        out.deletion_indicators.urls_estimated_deleted = high.saturating_sub(cnt).max(0);
     }
 
     if let Ok((cnt, max_id)) = db
@@ -445,8 +445,38 @@ pub fn parse_history(profile_dir: &Path, warnings: &mut Vec<DiagnosticWarning>) 
         out.deletion_indicators.visits_row_count = cnt;
         out.deletion_indicators.visits_max_id = max_id;
         out.deletion_indicators.visits_sqlite_seq = seq;
-        out.deletion_indicators.visits_estimated_deleted = (high - cnt).max(0);
+        out.deletion_indicators.visits_estimated_deleted = high.saturating_sub(cnt).max(0);
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_history_corrupted_negative_ids_no_overflow() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("History");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE urls (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT, title TEXT, visit_count INTEGER, typed_count INTEGER, last_visit_time INTEGER, hidden INTEGER);
+             CREATE TABLE visits (id INTEGER PRIMARY KEY AUTOINCREMENT, url INTEGER, visit_time INTEGER, from_visit INTEGER, transition INTEGER, visit_duration INTEGER);
+             INSERT INTO urls (id, url, title, visit_count, typed_count, last_visit_time, hidden)
+             VALUES (-9223372036854775800, 'https://example.com/', 'Test', 1, 0, 13300000000000000, 0);
+             INSERT INTO visits (id, url, visit_time, from_visit, transition, visit_duration)
+             VALUES (-9223372036854775800, -9223372036854775800, 13300000000000000, 0, 0, 0);
+             UPDATE sqlite_sequence SET seq = -9223372036854775800;",
+        )
+        .expect("seed corrupted negative ids");
+        drop(conn);
+
+        let mut warnings = Vec::new();
+        let parsed = parse_history(dir.path(), &mut warnings);
+        assert_eq!(parsed.urls.len(), 1);
+        assert_eq!(parsed.visits.len(), 1);
+        assert_eq!(parsed.deletion_indicators.urls_estimated_deleted, 0);
+        assert_eq!(parsed.deletion_indicators.visits_estimated_deleted, 0);
+    }
 }

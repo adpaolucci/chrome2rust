@@ -21,6 +21,10 @@ pub enum ExportFormat {
 pub enum CacheColumn {
     Url,
     ContentType,
+    DetectedContentType,
+    DetectedExtension,
+    FileSignature,
+    MimeMismatch,
     FileSize,
     CompressedSize,
     LastAccessed,
@@ -45,6 +49,10 @@ impl CacheColumn {
         match self {
             CacheColumn::Url => "URL",
             CacheColumn::ContentType => "Content Type",
+            CacheColumn::DetectedContentType => "Detected Type",
+            CacheColumn::DetectedExtension => "Detected Ext",
+            CacheColumn::FileSignature => "File Signature",
+            CacheColumn::MimeMismatch => "MIME Mismatch",
             CacheColumn::FileSize => "File Size",
             CacheColumn::CompressedSize => "Compressed Size",
             CacheColumn::LastAccessed => "Last Accessed",
@@ -69,6 +77,8 @@ impl CacheColumn {
         vec![
             CacheColumn::Url,
             CacheColumn::ContentType,
+            CacheColumn::DetectedContentType,
+            CacheColumn::DetectedExtension,
             CacheColumn::FileSize,
             CacheColumn::LastAccessed,
             CacheColumn::ServerTime,
@@ -86,10 +96,42 @@ impl CacheColumn {
         ]
     }
 
+    pub fn all_columns() -> Vec<CacheColumn> {
+        vec![
+            CacheColumn::Url,
+            CacheColumn::ContentType,
+            CacheColumn::DetectedContentType,
+            CacheColumn::DetectedExtension,
+            CacheColumn::FileSignature,
+            CacheColumn::MimeMismatch,
+            CacheColumn::FileSize,
+            CacheColumn::CompressedSize,
+            CacheColumn::LastAccessed,
+            CacheColumn::ServerTime,
+            CacheColumn::RecordCreatedTime,
+            CacheColumn::ExpirationTime,
+            CacheColumn::ServerName,
+            CacheColumn::ServerResponse,
+            CacheColumn::ContentEncoding,
+            CacheColumn::CacheName,
+            CacheColumn::UrlLength,
+            CacheColumn::WebSite,
+            CacheColumn::Frame,
+            CacheColumn::ServerIp,
+            CacheColumn::DeletedFile,
+            CacheColumn::Sha256,
+            CacheColumn::Backend,
+        ]
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "url" => Some(Self::Url),
             "contenttype" => Some(Self::ContentType),
+            "detectedcontenttype" | "detectedtype" | "realcontenttype" => Some(Self::DetectedContentType),
+            "detectedextension" | "detectedext" | "extension" | "ext" => Some(Self::DetectedExtension),
+            "filesignature" | "signature" | "magic" => Some(Self::FileSignature),
+            "mimemismatch" | "mismatch" => Some(Self::MimeMismatch),
             "filesize" | "size" => Some(Self::FileSize),
             "compressedsize" => Some(Self::CompressedSize),
             "lastaccessed" => Some(Self::LastAccessed),
@@ -115,6 +157,10 @@ impl CacheColumn {
         match self {
             CacheColumn::Url => entry.url.clone(),
             CacheColumn::ContentType => entry.content_type.clone().unwrap_or_default(),
+            CacheColumn::DetectedContentType => entry.detected_content_type.clone().unwrap_or_default(),
+            CacheColumn::DetectedExtension => entry.detected_extension.clone().unwrap_or_default(),
+            CacheColumn::FileSignature => entry.file_signature.clone().unwrap_or_default(),
+            CacheColumn::MimeMismatch => if entry.mime_mismatch { "Yes" } else { "No" }.to_string(),
             CacheColumn::FileSize => entry.file_size.to_string(),
             CacheColumn::CompressedSize => entry.compressed_size.to_string(),
             CacheColumn::LastAccessed => format_local_opt(entry.last_accessed, show_millis),
@@ -329,6 +375,7 @@ pub struct ExtractOptions {
     pub update_modified_time: bool,
     pub new_name_if_exist: bool,
     pub decompress: bool,
+    pub prefer_detected_extension: bool,
 }
 
 impl Default for ExtractOptions {
@@ -340,6 +387,7 @@ impl Default for ExtractOptions {
             update_modified_time: true,
             new_name_if_exist: true,
             decompress: true,
+            prefer_detected_extension: false,
         }
     }
 }
@@ -385,7 +433,7 @@ pub fn extract_cache_entries(entries: &[&CacheEntry], opts: &ExtractOptions) -> 
             }
         };
 
-        let mut dest_path = build_extract_path(entry, opts);
+        let mut dest_path = build_extract_path(entry, &bytes, opts);
         if let Some(parent) = dest_path.parent()
             && let Err(e) = std::fs::create_dir_all(parent)
         {
@@ -422,8 +470,14 @@ pub fn extract_cache_entries(entries: &[&CacheEntry], opts: &ExtractOptions) -> 
     Ok(summary)
 }
 
-fn build_extract_path(entry: &CacheEntry, opts: &ExtractOptions) -> PathBuf {
-    let ext = infer_extension(entry);
+fn build_extract_path(entry: &CacheEntry, payload: &[u8], opts: &ExtractOptions) -> PathBuf {
+    let det = chrome2rust_core::magic::detect_content(
+        &payload[..payload.len().min(64 * 1024)],
+        entry.content_type.as_deref(),
+        Some(&entry.url),
+        entry.content_disposition_filename.as_deref(),
+    );
+    let ext = det.extension.as_deref().or(entry.detected_extension.as_deref());
     let sanitized_cache = sanitize_filename(&entry.cache_name);
 
     if opts.use_website_dir_structure
@@ -442,79 +496,97 @@ fn build_extract_path(entry: &CacheEntry, opts: &ExtractOptions) -> PathBuf {
             .map(|s| s.filter(|p| !p.is_empty()).collect())
             .unwrap_or_default();
         if segs.len() > 1 {
-            for seg in &segs[..segs.len() - 1] {
+            for seg in segs[..segs.len() - 1].iter().take(16) {
                 dir = dir.join(sanitize_filename(seg));
             }
         }
         let file_part = match opts.filename_mode {
             ExtractFilenameMode::BasedOnUrl => {
-                let base = segs.last().copied().unwrap_or("index");
-                ensure_extension(&sanitize_filename(base), ext)
+                let (base, from_host) = if let Some(ref cd) = entry.content_disposition_filename
+                    && !cd.trim().is_empty()
+                {
+                    (cd.clone(), false)
+                } else if let Some(last) = segs.last() {
+                    ((*last).to_string(), false)
+                } else {
+                    ("index".to_string(), false)
+                };
+                resolve_filename(
+                    &sanitize_filename(&base),
+                    from_host,
+                    ext,
+                    opts.prefer_detected_extension,
+                )
             }
             ExtractFilenameMode::CacheName => sanitized_cache,
-            ExtractFilenameMode::CacheNameWithExtension => ensure_extension(&sanitized_cache, ext),
+            ExtractFilenameMode::CacheNameWithExtension => {
+                resolve_filename(&sanitized_cache, false, ext, opts.prefer_detected_extension)
+            }
         };
         return dir.join(file_part);
     }
 
     let filename = match opts.filename_mode {
         ExtractFilenameMode::BasedOnUrl => {
-            let base = url::Url::parse(&entry.url)
-                .ok()
-                .and_then(|u| {
-                    u.path_segments()
-                        .and_then(|mut s| s.rfind(|p| !p.is_empty()).map(str::to_string))
-                        .or_else(|| u.host_str().map(str::to_string))
-                })
-                .unwrap_or_else(|| sanitized_cache.clone());
-            ensure_extension(&sanitize_filename(&base), ext)
+            let (raw_base, from_host) = if let Some(ref cd) = entry.content_disposition_filename
+                && !cd.trim().is_empty()
+            {
+                (cd.clone(), false)
+            } else if let Ok(u) = url::Url::parse(&entry.url) {
+                if let Some(last) = u.path_segments().and_then(|mut s| s.rfind(|p| !p.is_empty())) {
+                    (last.to_string(), false)
+                } else if let Some(host) = u.host_str() {
+                    (host.to_string(), true)
+                } else {
+                    (sanitized_cache.clone(), false)
+                }
+            } else {
+                (sanitized_cache.clone(), false)
+            };
+            resolve_filename(
+                &sanitize_filename(&raw_base),
+                from_host,
+                ext,
+                opts.prefer_detected_extension,
+            )
         }
         ExtractFilenameMode::CacheName => sanitized_cache,
-        ExtractFilenameMode::CacheNameWithExtension => ensure_extension(&sanitized_cache, ext),
+        ExtractFilenameMode::CacheNameWithExtension => {
+            resolve_filename(&sanitized_cache, false, ext, opts.prefer_detected_extension)
+        }
     };
 
     opts.output_dir.join(filename)
 }
 
-fn ensure_extension(base: &str, ext: Option<&str>) -> String {
-    let mut name = if base.is_empty() {
-        "index".to_string()
-    } else {
-        base.to_string()
+fn resolve_filename(base: &str, from_host: bool, detected_ext: Option<&str>, prefer_detected_ext: bool) -> String {
+    let name = if base.is_empty() { "index" } else { base };
+    let Some(ext) = detected_ext.filter(|e| !e.is_empty()) else {
+        return name.to_string();
     };
-    if let Some(e) = ext {
-        let has_ext = Path::new(&name).extension().is_some();
-        if !has_ext {
-            name.push('.');
-            name.push_str(e);
-        }
-    }
-    name
-}
 
-fn infer_extension(entry: &CacheEntry) -> Option<&'static str> {
-    let ct = entry.content_type.as_deref().unwrap_or("");
-    match ct {
-        "text/html" => Some("html"),
-        "text/css" => Some("css"),
-        "text/javascript" | "application/javascript" | "application/x-javascript" => Some("js"),
-        "application/json" | "text/json" => Some("json"),
-        "text/plain" => Some("txt"),
-        "text/xml" | "application/xml" => Some("xml"),
-        "image/png" => Some("png"),
-        "image/jpeg" | "image/jpg" => Some("jpg"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "image/svg+xml" => Some("svg"),
-        "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
-        "font/woff2" => Some("woff2"),
-        "font/woff" => Some("woff"),
-        "application/wasm" => Some("wasm"),
-        "application/pdf" => Some("pdf"),
-        "video/mp4" => Some("mp4"),
-        "audio/mpeg" => Some("mp3"),
-        _ => None,
+    // Hostname root fallbacks (`example.com/`, `notion.so/`) do not carry file extensions
+    if from_host {
+        return format!("{name}.{ext}");
     }
+
+    let Some((stem, existing_raw)) = name.rsplit_once('.') else {
+        return format!("{name}.{ext}");
+    };
+    let existing = existing_raw.to_ascii_lowercase();
+
+    // Dynamic server endpoints (image.php, get.ashx) or versioned dots (jquery-3.7.1) lack payload extensions
+    if chrome2rust_core::magic::is_server_endpoint_extension(&existing)
+        || !chrome2rust_core::magic::is_known_extension(&existing)
+    {
+        return format!("{name}.{ext}");
+    }
+
+    if prefer_detected_ext && !chrome2rust_core::magic::extensions_equivalent(&existing, ext) {
+        return format!("{stem}.{ext}");
+    }
+
+    name.to_string()
 }
 
 pub fn sanitize_filename(name: &str) -> String {
@@ -528,10 +600,43 @@ pub fn sanitize_filename(name: &str) -> String {
     }
     let trimmed = out.trim_matches(['.', ' ']).to_string();
     if trimmed.is_empty() {
-        "file".to_string()
+        return "file".to_string();
+    }
+    let stem = trimmed.split('.').next().unwrap_or(&trimmed);
+    if is_windows_reserved_stem(stem) {
+        format!("_{trimmed}")
     } else {
         trimmed
     }
+}
+
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    let up = stem.to_ascii_uppercase();
+    matches!(
+        up.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn next_available_filename(path: &Path) -> PathBuf {
@@ -565,4 +670,116 @@ pub fn escape_html(s: &str) -> String {
 
 fn escape_xml(s: &str) -> String {
     escape_html(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::pickle::HttpResponseMetadata;
+    use super::super::{CacheBackendKind, CacheLocationRef};
+    use super::*;
+    use chrome2rust_core::magic::ContentDetection;
+
+    fn dummy_entry(url: &str, ct: Option<&str>, cd_name: Option<&str>) -> CacheEntry {
+        let http = HttpResponseMetadata {
+            content_type: ct.map(str::to_string),
+            content_disposition_filename: cd_name.map(str::to_string),
+            ..Default::default()
+        };
+        CacheEntry::from_metadata(
+            "id1".into(),
+            CacheBackendKind::SimpleCache,
+            "abcdef01_0".into(),
+            "/tmp/abcdef01_0".into(),
+            url.into(),
+            http,
+            10,
+            10,
+            None,
+            None,
+            false,
+            Some(true),
+            None,
+            ContentDetection::default(),
+            CacheLocationRef {
+                backend: CacheBackendKind::SimpleCache,
+                cache_dir: PathBuf::from("/tmp"),
+                primary_file: PathBuf::from("/tmp/abcdef01_0"),
+                blockfile_stream1: None,
+                simple_stream1_range: None,
+                simple_alt_stream1_file: None,
+            },
+        )
+    }
+
+    #[test]
+    fn test_build_extract_path_edge_cases() {
+        let opts = ExtractOptions {
+            output_dir: PathBuf::from("/tmp/out"),
+            ..Default::default()
+        };
+
+        // 1. Root URL TLD guard (`notion.so/`, `example.com/`)
+        let root_so = dummy_entry("https://notion.so/", None, None);
+        let p_so = build_extract_path(&root_so, b"<!doctype html><html></html>", &opts);
+        assert_eq!(p_so, PathBuf::from("/tmp/out/notion.so.html"));
+
+        // 2. Versioned JS without .js extension
+        let ver_js = dummy_entry(
+            "https://cdn.example.com/jquery-3.7.1",
+            Some("application/octet-stream"),
+            None,
+        );
+        let p_js = build_extract_path(&ver_js, b"'use strict';\nconst x=1;", &opts);
+        assert_eq!(p_js, PathBuf::from("/tmp/out/jquery-3.7.1.js"));
+
+        // 3. Server script endpoint serving WebP
+        let php_img = dummy_entry(
+            "https://example.com/image.php?id=9",
+            Some("application/octet-stream"),
+            None,
+        );
+        let p_webp = build_extract_path(&php_img, b"RIFF\x12\x00\x00\x00WEBPVP8 ", &opts);
+        assert_eq!(p_webp, PathBuf::from("/tmp/out/image.php.webp"));
+
+        // 4. Content-Disposition filename overrides opaque endpoint
+        let cd = dummy_entry(
+            "https://example.com/download?id=99",
+            Some("application/pdf"),
+            Some("statement.pdf"),
+        );
+        let p_cd = build_extract_path(&cd, b"%PDF-1.7\n", &opts);
+        assert_eq!(p_cd, PathBuf::from("/tmp/out/statement.pdf"));
+
+        // 5. Masquerading .png -> .dll only when prefer_detected_extension is enabled
+        let mut pe = vec![0u8; 128];
+        pe[0..2].copy_from_slice(b"MZ");
+        pe[0x3c..0x40].copy_from_slice(&64u32.to_le_bytes());
+        pe[64..68].copy_from_slice(b"PE\0\0");
+        pe[64 + 22..64 + 24].copy_from_slice(&0x2000u16.to_le_bytes());
+        let evil = dummy_entry("https://evil.test/logo.png", Some("image/png"), None);
+        assert_eq!(
+            build_extract_path(&evil, &pe, &opts),
+            PathBuf::from("/tmp/out/logo.png")
+        );
+        let opts_prefer = ExtractOptions {
+            prefer_detected_extension: true,
+            ..opts
+        };
+        assert_eq!(
+            build_extract_path(&evil, &pe, &opts_prefer),
+            PathBuf::from("/tmp/out/logo.dll")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_filename_safety() {
+        assert_eq!(sanitize_filename(""), "file");
+        assert_eq!(sanitize_filename(".."), "file");
+        assert_eq!(sanitize_filename("."), "file");
+        assert_eq!(sanitize_filename("con"), "_con");
+        assert_eq!(sanitize_filename("NUL.txt"), "_NUL.txt");
+        assert_eq!(sanitize_filename("COM1.html"), "_COM1.html");
+        assert_eq!(sanitize_filename("lpt9.png"), "_lpt9.png");
+        assert_eq!(sanitize_filename("../evil\\file\0.js"), "_evil_file_.js");
+    }
 }
