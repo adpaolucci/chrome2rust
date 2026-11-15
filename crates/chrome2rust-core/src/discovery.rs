@@ -332,18 +332,91 @@ pub fn discover_profiles_in_user_data(
     (profiles, last_used)
 }
 
+fn has_non_cache_profile_artifacts(path: &Path) -> bool {
+    const PROFILE_FILES: &[&str] = &[
+        "History",
+        "Preferences",
+        "Secure Preferences",
+        "Bookmarks",
+        "Cookies",
+        "Web Data",
+        "Login Data",
+        "Login Data For Account",
+        "Top Sites",
+        "Shortcuts",
+        "Favicons",
+        "Visited Links",
+        "Current Session",
+        "Current Tabs",
+        "Extension Cookies",
+    ];
+    if PROFILE_FILES.iter().any(|f| path.join(f).is_file()) {
+        return true;
+    }
+    path.join("Network").join("Cookies").is_file()
+        || path.join("Sessions").is_dir()
+        || path.join("Local Storage").join("leveldb").is_dir()
+        || path.join("Session Storage").is_dir()
+        || path.join("IndexedDB").is_dir()
+}
+
+pub fn has_profile_artifacts(path: &Path) -> bool {
+    has_non_cache_profile_artifacts(path) || !find_cache_dirs_in_profile(path).is_empty()
+}
+
 pub fn looks_like_profile_dir(path: &Path, dir_name: &str) -> bool {
-    if dir_name == "Default"
+    const EXCLUDED_SUBDIRS: &[&str] = &[
+        "ShaderCache",
+        "GrShaderCache",
+        "GraphiteDawnCache",
+        "Crashpad",
+        "BrowserMetrics",
+        "Safe Browsing",
+        "Subresource Filter",
+        "CertificateRevocation",
+        "Crowd Deny",
+        "FileTypePolicies",
+        "MEIPreload",
+        "OriginTrials",
+        "PKIMetadata",
+        "pnacl",
+        "RecoveryImproved",
+        "SSLErrorAssistant",
+        "TLSDeprecationConfig",
+        "TrustTokenKeyCommitments",
+        "WasmTtsEngine",
+        "WidevineCdm",
+        "ZxcvbnData",
+        "Cache",
+        "Cache_Data",
+        "Code Cache",
+        "GPUCache",
+        "DawnCache",
+        "Media Cache",
+        "System Cache",
+        "Service Worker",
+        "Network",
+        "Sessions",
+        "Local Storage",
+        "Session Storage",
+        "IndexedDB",
+        "Extensions",
+        "Storage",
+        "blob_storage",
+        "databases",
+    ];
+    if EXCLUDED_SUBDIRS.contains(&dir_name) {
+        return false;
+    }
+    if (dir_name == "Default"
         || dir_name.starts_with("Profile ")
         || dir_name == "Guest Profile"
-        || dir_name == "System Profile"
+        || dir_name == "System Profile")
+        && path.is_dir()
     {
         return true;
     }
-    // Also detect custom-named profiles (like Opera or standalone profile directories)
-    ["History", "Preferences", "Bookmarks", "Cookies", "Web Data"]
-        .iter()
-        .any(|f| path.join(f).exists())
+    has_profile_artifacts(path)
 }
 
 /// Finds HTTP cache directories inside a profile directory (or cache profile directory),
@@ -379,7 +452,7 @@ pub fn is_cache_data_dir(dir: &Path) -> bool {
         return true;
     }
     if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten().take(64) {
+        for e in rd.flatten().take(512) {
             let name = e.file_name();
             let s = name.to_string_lossy();
             if s.ends_with("_0") || s.ends_with("_1") || s.starts_with("f_") {
@@ -390,13 +463,77 @@ pub fn is_cache_data_dir(dir: &Path) -> bool {
     false
 }
 
+/// Recursively searches container subdirectories up to `max_depth` for profile or cache dirs.
+fn find_nested_targets(root: &Path, max_depth: usize) -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+    use std::collections::VecDeque;
+
+    let mut queue = VecDeque::new();
+    let mut nested_profiles = Vec::new();
+    let mut nested_caches = Vec::new();
+    let mut detected_user_data: Option<PathBuf> = None;
+
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                queue.push_back((p, 1usize));
+            }
+        }
+    }
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        let dir_name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if detected_user_data.is_none() && dir.join("Local State").is_file() {
+            detected_user_data = Some(dir.clone());
+        }
+
+        let cache_data_sub = dir.join("Cache_Data");
+        if cache_data_sub.is_dir() && is_cache_data_dir(&cache_data_sub) && !has_non_cache_profile_artifacts(&dir) {
+            if !nested_caches.contains(&cache_data_sub) {
+                nested_caches.push(cache_data_sub);
+            }
+            continue;
+        }
+        if is_cache_data_dir(&dir) && !has_non_cache_profile_artifacts(&dir) {
+            if !nested_caches.contains(&dir) {
+                nested_caches.push(dir);
+            }
+            continue;
+        }
+
+        if looks_like_profile_dir(&dir, &dir_name) && !dir.join("Local State").is_file() {
+            if !nested_profiles.contains(&dir) {
+                nested_profiles.push(dir);
+            }
+            continue;
+        }
+
+        if depth < max_depth
+            && let Ok(rd) = std::fs::read_dir(&dir)
+        {
+            for entry in rd.flatten() {
+                let child = entry.path();
+                if child.is_dir() {
+                    queue.push_back((child, depth + 1));
+                }
+            }
+        }
+    }
+
+    (nested_profiles, nested_caches, detected_user_data)
+}
+
 /// Classifies an arbitrary path given by the user into a Cache folder, Profile folder, or User Data root.
 pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
     let input_path = input.to_path_buf();
 
     // 1. Direct Cache_Data or Cache directory?
     let cache_data_sub = input.join("Cache_Data");
-    if cache_data_sub.is_dir() && is_cache_data_dir(&cache_data_sub) {
+    if cache_data_sub.is_dir() && is_cache_data_dir(&cache_data_sub) && !has_non_cache_profile_artifacts(input) {
         return ResolvedTarget {
             kind: TargetKind::CacheDir,
             input_path,
@@ -406,7 +543,7 @@ pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
             last_used_profile: None,
         };
     }
-    if is_cache_data_dir(input) {
+    if is_cache_data_dir(input) && !has_non_cache_profile_artifacts(input) {
         return ResolvedTarget {
             kind: TargetKind::CacheDir,
             input_path: input_path.clone(),
@@ -417,12 +554,12 @@ pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
         };
     }
 
-    // 2. Profile directory (e.g. .../User Data/Default)?
+    // 2. Profile directory (e.g. .../User Data/Default or custom exported profile)?
     let name = input
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    if looks_like_profile_dir(input, &name) && !input.join("Local State").is_file() {
+    if !input.join("Local State").is_file() && has_profile_artifacts(input) {
         let mut cache_dirs = find_cache_dirs_in_profile(input);
         if cache_dirs.is_empty() && input.join("Cache").is_dir() {
             cache_dirs.push(input.join("Cache"));
@@ -439,7 +576,7 @@ pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
 
     // 3. User Data root directory (contains Local State or Default / Profile N)?
     let (profiles, last_used) = discover_profiles_in_user_data(input, None);
-    let profile_dirs: Vec<PathBuf> = profiles.iter().map(|p| p.path.clone()).collect();
+    let mut profile_dirs: Vec<PathBuf> = profiles.iter().map(|p| p.path.clone()).collect();
     let mut cache_dirs = Vec::new();
     for p in &profiles {
         for c in &p.cache_dirs {
@@ -447,6 +584,48 @@ pub fn resolve_target_path(input: &Path) -> ResolvedTarget {
                 cache_dirs.push(c.clone());
             }
         }
+    }
+
+    if !profile_dirs.is_empty() || input.join("Local State").is_file() {
+        return ResolvedTarget {
+            kind: TargetKind::UserDataRoot,
+            input_path: input_path.clone(),
+            user_data_dir: Some(input_path),
+            profile_dirs,
+            cache_dirs,
+            last_used_profile: last_used,
+        };
+    }
+
+    // 4. Parent / extracted container directory containing nested profiles or cache dirs?
+    let (nested_profiles, nested_caches, detected_user_data) = find_nested_targets(input, 3);
+    if !nested_profiles.is_empty() {
+        profile_dirs = nested_profiles;
+        for pdir in &profile_dirs {
+            for c in find_cache_dirs_in_profile(pdir) {
+                if !cache_dirs.contains(&c) {
+                    cache_dirs.push(c);
+                }
+            }
+        }
+        return ResolvedTarget {
+            kind: TargetKind::UserDataRoot,
+            input_path: input_path.clone(),
+            user_data_dir: detected_user_data.or(Some(input_path)),
+            profile_dirs,
+            cache_dirs,
+            last_used_profile: last_used,
+        };
+    }
+    if !nested_caches.is_empty() {
+        return ResolvedTarget {
+            kind: TargetKind::CacheDir,
+            input_path,
+            user_data_dir: None,
+            profile_dirs: Vec::new(),
+            cache_dirs: nested_caches,
+            last_used_profile: None,
+        };
     }
 
     ResolvedTarget {
@@ -774,5 +953,54 @@ mod tests {
         assert_eq!(insp_pe.suggested_extension.as_deref(), Some("exe"));
         assert!(insp_pe.extension_mismatch);
         assert_eq!(insp_pe.suggested_filename.as_deref(), Some("avatar.exe"));
+    }
+
+    #[test]
+    fn test_resolve_custom_profile_with_network_cookies_only() {
+        let dir = TempDir::new().unwrap();
+        let custom_profile = dir.path().join("Subject_Alpha_Export");
+        std::fs::create_dir_all(custom_profile.join("Network")).unwrap();
+        std::fs::write(custom_profile.join("Network").join("Cookies"), b"SQLite format 3\0").unwrap();
+
+        let resolved = resolve_target_path(&custom_profile);
+        assert_eq!(resolved.kind, TargetKind::ProfileDir);
+        assert_eq!(resolved.profile_dirs, vec![custom_profile]);
+    }
+
+    #[test]
+    fn test_resolve_custom_profile_with_cache_only() {
+        let dir = TempDir::new().unwrap();
+        let custom_profile = dir.path().join("Exported_Cache_Profile");
+        let cache_data = custom_profile.join("Cache").join("Cache_Data");
+        std::fs::create_dir_all(&cache_data).unwrap();
+        std::fs::write(cache_data.join("index"), b"\0\0\0\0").unwrap();
+
+        let resolved = resolve_target_path(&custom_profile);
+        assert_eq!(resolved.kind, TargetKind::ProfileDir);
+        assert_eq!(resolved.profile_dirs, vec![custom_profile]);
+        assert_eq!(resolved.cache_dirs, vec![cache_data.clone()]);
+
+        // Direct selection of Cache or Cache_Data still resolves to CacheDir
+        let direct_cache_parent = resolve_target_path(cache_data.parent().unwrap());
+        assert_eq!(direct_cache_parent.kind, TargetKind::CacheDir);
+        assert_eq!(direct_cache_parent.cache_dirs, vec![cache_data]);
+    }
+
+    #[test]
+    fn test_resolve_nested_container_folder() {
+        let dir = TempDir::new().unwrap();
+        let container = dir.path().join("Case_Container");
+        let nested_ud = container.join("Acquired").join("ChromeData");
+        let profile = nested_ud.join("WorkProfile");
+        std::fs::create_dir_all(profile.join("Cache").join("Cache_Data")).unwrap();
+        std::fs::write(nested_ud.join("Local State"), br#"{"os_crypt":{}}"#).unwrap();
+        std::fs::write(profile.join("Login Data"), b"SQLite format 3\0").unwrap();
+        std::fs::write(profile.join("Cache").join("Cache_Data").join("index"), b"\0").unwrap();
+
+        let resolved = resolve_target_path(&container);
+        assert_eq!(resolved.kind, TargetKind::UserDataRoot);
+        assert_eq!(resolved.user_data_dir, Some(nested_ud));
+        assert_eq!(resolved.profile_dirs, vec![profile.clone()]);
+        assert_eq!(resolved.cache_dirs, vec![profile.join("Cache").join("Cache_Data")]);
     }
 }

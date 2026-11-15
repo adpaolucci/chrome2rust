@@ -3,6 +3,22 @@ use chrome2rust_report::ReportFormat;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use std::path::PathBuf;
 
+pub fn pick_target_folder(current_input: &str) -> Option<PathBuf> {
+    let mut dlg = rfd::FileDialog::new().set_title("Select Chrome User Data, Profile, or Cache Folder");
+    let trimmed = current_input.trim().trim_matches('"').trim();
+    if !trimmed.is_empty() {
+        let p = PathBuf::from(trimmed);
+        if p.is_dir() {
+            dlg = dlg.set_directory(&p);
+        } else if let Some(parent) = p.parent()
+            && parent.is_dir()
+        {
+            dlg = dlg.set_directory(parent);
+        }
+    }
+    dlg.pick_folder()
+}
+
 pub fn render_ribbon(ctx: &egui::Context, state: &mut AppState) {
     // 1. Classic Win32 Menu Bar
     egui::TopBottomPanel::top("top_menu_bar")
@@ -17,10 +33,7 @@ pub fn render_ribbon(ctx: &egui::Context, state: &mut AppState) {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open User Data / Profile / Cache...").clicked() {
                         ui.close();
-                        if let Some(folder) = rfd::FileDialog::new()
-                            .set_title("Open Chrome User Data, Profile, or Cache Folder")
-                            .pick_folder()
-                        {
+                        if let Some(folder) = pick_target_folder(&state.path_input) {
                             state.start_load(folder, ctx);
                         }
                     }
@@ -215,16 +228,15 @@ pub fn render_ribbon(ctx: &egui::Context, state: &mut AppState) {
                 ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
 
                 if toolbar_button(ui, "Open...", "Open Chrome User Data, Profile, or Cache directory").clicked()
-                    && let Some(folder) = rfd::FileDialog::new()
-                        .set_title("Open Chrome User Data, Profile, or Cache Folder")
-                        .pick_folder()
+                    && let Some(folder) = pick_target_folder(&state.path_input)
                 {
                     state.start_load(folder, ctx);
                 }
                 if toolbar_button(ui, "Refresh (F5)", "Re-scan the current Target path").clicked()
-                    && !state.path_input.trim().is_empty()
+                    && !state.start_load_from_input(ctx)
+                    && let Some(folder) = pick_target_folder(&state.path_input)
                 {
-                    state.start_load(PathBuf::from(state.path_input.trim()), ctx);
+                    state.start_load(folder, ctx);
                 }
 
                 ui.separator();
@@ -255,17 +267,20 @@ pub fn render_ribbon(ctx: &egui::Context, state: &mut AppState) {
                 ui.separator();
 
                 ui.label(RichText::new("Target:").size(11.0).strong().color(Color32::BLACK));
-                let avail_edit = (ui.available_width() - 80.0).clamp(160.0, 420.0);
+                let avail_edit = (ui.available_width() - 96.0).clamp(140.0, 380.0);
                 let path_edit = ui.add_sized(
                     [avail_edit, 21.0],
                     egui::TextEdit::singleline(&mut state.path_input)
                         .hint_text("User Data, Profile, or Cache_Data path"),
                 );
-                if path_edit.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    && !state.path_input.trim().is_empty()
+                if path_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let _ = state.start_load_from_input(ctx);
+                }
+                if toolbar_button(ui, "Load", "Analyze the Target path (or pick a folder if blank)").clicked()
+                    && !state.start_load_from_input(ctx)
+                    && let Some(folder) = pick_target_folder(&state.path_input)
                 {
-                    state.start_load(PathBuf::from(state.path_input.trim()), ctx);
+                    state.start_load(folder, ctx);
                 }
             });
         });

@@ -12,10 +12,12 @@ use std::path::PathBuf;
 
 fn parse_launch_args() -> LaunchArgs {
     let mut out = LaunchArgs::default();
+    let mut pick = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--decrypt" => out.decrypt = true,
+            "--pick" | "--browse" => pick = true,
             "--key" => {
                 if let Some(k) = args.next() {
                     out.keys.push(k);
@@ -23,7 +25,7 @@ fn parse_launch_args() -> LaunchArgs {
             }
             "--help" | "-h" => {
                 println!(
-                    "chrome2rust-gui [PATH] [--decrypt] [--key <PASSPHRASE_OR_HEX>]\n\
+                    "chrome2rust-gui [PATH] [--pick] [--decrypt] [--key <PASSPHRASE_OR_HEX>]\n\
                      Launch the native Chrome2Rust Management Console desktop GUI."
                 );
                 std::process::exit(0);
@@ -33,6 +35,11 @@ fn parse_launch_args() -> LaunchArgs {
             }
             _ => {}
         }
+    }
+    if pick && out.path.is_none() {
+        out.path = rfd::FileDialog::new()
+            .set_title("Select Chrome User Data, Profile, or Cache Folder")
+            .pick_folder();
     }
     out
 }

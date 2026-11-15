@@ -135,12 +135,63 @@ pub fn render_console_tree(ui: &mut egui::Ui, state: &mut AppState, ctx: &egui::
                         ui.horizontal(|ui| {
                             ui.add_space(18.0);
                             ui.label(
-                                RichText::new("(No User Data loaded)")
+                                RichText::new("(No target folder loaded)")
                                     .italics()
                                     .size(11.0)
                                     .color(Color32::from_rgb(130, 130, 130)),
                             );
                         });
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(18.0);
+                            if ui.small_button("Browse Target Folder...").clicked()
+                                && let Some(folder) = crate::views::ribbon::pick_target_folder(&state.path_input)
+                            {
+                                state.start_load(folder, ctx);
+                            }
+                        });
+
+                        let browser_choices: Vec<(String, std::path::PathBuf, usize)> = state
+                            .discovered_browsers
+                            .iter()
+                            .filter_map(|b| {
+                                let target = if b.user_data_dir.is_dir() {
+                                    Some(b.user_data_dir.clone())
+                                } else {
+                                    b.cache_root_dir.clone()
+                                };
+                                target.map(|dir| (b.name.clone(), dir, b.profiles.len()))
+                            })
+                            .collect();
+
+                        if !browser_choices.is_empty() {
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(12.0);
+                                ui.label(
+                                    RichText::new("Detected Local Browsers:")
+                                        .size(11.0)
+                                        .strong()
+                                        .color(Color32::from_rgb(60, 60, 60)),
+                                );
+                            });
+                            for (name, dir, profile_count) in browser_choices {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(18.0);
+                                    let label = format!("{name} ({profile_count})");
+                                    if ui
+                                        .selectable_label(
+                                            false,
+                                            RichText::new(label).size(11.0).color(Color32::from_rgb(0, 51, 153)),
+                                        )
+                                        .on_hover_text(format!("Load {}", dir.display()))
+                                        .clicked()
+                                    {
+                                        state.start_load(dir, ctx);
+                                    }
+                                });
+                            }
+                        }
                     }
 
                     ui.add_space(10.0);

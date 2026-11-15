@@ -27,9 +27,7 @@ impl eframe::App for Chrome2RustApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.state.first_frame {
             self.state.first_frame = false;
-            if let Some(p) = self.state.initial_load_path.take()
-                && p.exists()
-            {
+            if let Some(p) = self.state.initial_load_path.take() {
                 self.state.start_load(p, ctx);
             }
         }

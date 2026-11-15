@@ -489,7 +489,7 @@ fn main() -> Result<()> {
         Commands::Report(args) => cmd_report(args, pick, audit_manifest.as_deref()),
         Commands::Custody(args) => cmd_custody(args, pick),
         Commands::Pick(args) => cmd_pick(args),
-        Commands::Gui(args) => cmd_gui(args),
+        Commands::Gui(args) => cmd_gui(args, pick),
         Commands::Mcp(args) => cmd_mcp(args),
     }
 }
@@ -1284,7 +1284,7 @@ fn cmd_pick(args: PickArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_gui(args: GuiArgs) -> Result<()> {
+fn cmd_gui(args: GuiArgs, pick: bool) -> Result<()> {
     println!("Launching Chrome2Rust Management Console (Pure-Rust native GUI)...");
     let current_exe = std::env::current_exe().unwrap_or_default();
     let parent_dir = current_exe.parent().unwrap_or_else(|| Path::new(""));
@@ -1303,6 +1303,8 @@ fn cmd_gui(args: GuiArgs) -> Result<()> {
 
     if let Some(path) = &args.path {
         cmd.arg(path);
+    } else if pick {
+        cmd.arg("--pick");
     }
     if args.decrypt {
         cmd.arg("--decrypt");

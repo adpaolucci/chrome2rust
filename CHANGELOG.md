@@ -5,6 +5,15 @@ All notable changes to `chrome2rust` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-11-15
+
+### Fixed
+- **Target Folder Selection & Worker Superseding (`chrome2rust-gui`)**: Removed automatic Frame-0 loading of the default local Chrome `User Data` directory when launching without a `PATH` argument, and replaced the `is_loading` early return in `AppState::start_load` with monotonically versioned `load_generation` tracking so selecting a target folder via `Open...`, `File -> Open...`, or the `Target:` bar always takes precedence over any in-flight scan.
+- **Custom / Partial Target Folder Resolution (`chrome2rust-core`)**: Expanded `looks_like_profile_dir` and `resolve_target_path` to recognize modern `Network/Cookies`, `Login Data`, `Sessions`, `Local Storage/leveldb`, `Session Storage`, `IndexedDB`, and nested container folders (up to depth 3), and increased the `is_cache_data_dir` directory entry scan window.
+
+### Added
+- **GUI Target Controls & `--pick` Support (`chrome2rust-gui`, `chrome2rust-cli`)**: Added a `Load` button next to the `Target:` input bar, initial directory seeding for folder picker dialogs, one-click `Browse Target Folder...` and detected local browser shortcuts in the Console Tree when no target is loaded, and `--pick`/`--browse` support when launching `chrome2rust-gui` or `chrome2rust gui`.
+
 ## [0.2.1] - 2026-11-15
 
 ### Fixed

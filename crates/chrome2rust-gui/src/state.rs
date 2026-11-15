@@ -110,7 +110,9 @@ pub struct LoadedPayloadPreview {
 }
 
 pub enum WorkerEvent {
-    AnalysisFinished(Box<UserDataReport>),
+    Status(u64, String),
+    AnalysisFinished(u64, Box<UserDataReport>),
+    Error(u64, String),
 }
 
 pub struct ExtractDialogState {
@@ -187,6 +189,7 @@ pub struct AppState {
 
     // Worker & status
     pub worker_rx: Option<Receiver<WorkerEvent>>,
+    pub load_generation: u64,
     pub is_loading: bool,
     pub status_message: String,
     pub first_frame: bool,
@@ -196,17 +199,8 @@ pub struct AppState {
 impl AppState {
     pub fn new(initial: LaunchArgs) -> Self {
         let browsers = discover_local_browsers();
-        let default_path = initial.path.clone().or_else(|| {
-            browsers.first().and_then(|b| {
-                if b.user_data_dir.is_dir() {
-                    Some(b.user_data_dir.clone())
-                } else {
-                    b.cache_root_dir.clone()
-                }
-            })
-        });
-
-        let path_input = default_path
+        let initial_load_path = initial.path.clone();
+        let path_input = initial_load_path
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
@@ -273,10 +267,13 @@ impl AppState {
             },
 
             worker_rx: None,
+            load_generation: 0,
             is_loading: false,
-            status_message: "Ready. Choose a Chrome User Data, Profile, or Cache directory.".into(),
+            status_message:
+                "Ready — click Open... to select a target folder, or choose a discovered browser in the Console Tree."
+                    .into(),
             first_frame: true,
-            initial_load_path: initial.path.or(default_path),
+            initial_load_path,
         }
     }
 
@@ -296,19 +293,40 @@ impl AppState {
         }
     }
 
+    pub fn start_load_from_input(&mut self, ctx: &egui::Context) -> bool {
+        let trimmed = self.path_input.trim().trim_matches('"').trim().to_string();
+        if trimmed.is_empty() {
+            return false;
+        }
+        self.start_load(PathBuf::from(trimmed), ctx);
+        true
+    }
+
     pub fn start_load(&mut self, path: PathBuf, ctx: &egui::Context) {
-        if self.is_loading {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let gen_id = self.load_generation;
+
+        self.path_input = path.display().to_string();
+        self.selected_profile_idx = None;
+        self.selected_rows.clear();
+        self.current_preview = None;
+
+        if !path.exists() {
+            self.is_loading = false;
+            self.worker_rx = None;
+            self.status_message = format!("Target path does not exist: {}", path.display());
             return;
         }
-        self.path_input = path.display().to_string();
+
         self.is_loading = true;
-        self.status_message = format!("Analyzing {} ...", path.display());
+        self.status_message = format!("Scanning {} ...", path.display());
         let crypto = self.crypto_options();
         let (tx, rx) = mpsc::channel();
         self.worker_rx = Some(rx);
         let ctx_clone = ctx.clone();
 
         std::thread::spawn(move || {
+            let _ = tx.send(WorkerEvent::Status(gen_id, format!("Analyzing {} ...", path.display())));
             let opts = AnalysisOptions {
                 cache_options: CacheScanOptions {
                     compute_hashes: false,
@@ -318,36 +336,66 @@ impl AppState {
                 extra_cache_dirs: Vec::new(),
                 include_timeline: true,
             };
-            let report = analyze_user_data(&path, &opts);
-            let _ = tx.send(WorkerEvent::AnalysisFinished(Box::new(report)));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| analyze_user_data(&path, &opts))) {
+                Ok(report) => {
+                    let _ = tx.send(WorkerEvent::AnalysisFinished(gen_id, Box::new(report)));
+                }
+                Err(_) => {
+                    let _ = tx.send(WorkerEvent::Error(
+                        gen_id,
+                        format!("Analysis panicked while scanning {}", path.display()),
+                    ));
+                }
+            }
             ctx_clone.request_repaint();
         });
     }
 
     pub fn poll_worker(&mut self, ctx: &egui::Context) {
-        let mut finished = None;
+        let mut events = Vec::new();
         if let Some(rx) = &self.worker_rx {
             while let Ok(ev) = rx.try_recv() {
-                finished = Some(ev);
+                events.push(ev);
             }
         }
-        if let Some(WorkerEvent::AnalysisFinished(report)) = finished {
-            self.is_loading = false;
-            self.worker_rx = None;
-            let summary_msg = format!(
-                "Loaded {} profiles | {} cache entries ({}) | {} URLs | {} findings",
-                report.summary.profile_count,
-                report.summary.total_cache_entries,
-                format_bytes(report.summary.total_cache_bytes),
-                report.summary.total_history_urls,
-                report.summary.total_findings,
-            );
-            self.status_message = summary_msg;
-            self.report = Some(*report);
-            self.selected_profile_idx = None;
-            self.custody_dlg.manifest = None;
-            self.custody_dlg.status = None;
-            self.rebuild_cache_view(ctx);
+        for ev in events {
+            match ev {
+                WorkerEvent::Status(gen_id, msg) => {
+                    if gen_id == self.load_generation {
+                        self.status_message = msg;
+                    }
+                }
+                WorkerEvent::Error(gen_id, msg) => {
+                    if gen_id == self.load_generation {
+                        self.is_loading = false;
+                        self.worker_rx = None;
+                        self.status_message = msg;
+                    }
+                }
+                WorkerEvent::AnalysisFinished(gen_id, report) => {
+                    if gen_id != self.load_generation {
+                        continue;
+                    }
+                    self.is_loading = false;
+                    self.worker_rx = None;
+                    let summary_msg = format!(
+                        "Loaded {} ({:?}): {} profiles | {} cache entries ({}) | {} URLs | {} findings",
+                        report.target_path,
+                        report.target_kind,
+                        report.summary.profile_count,
+                        report.summary.total_cache_entries,
+                        format_bytes(report.summary.total_cache_bytes),
+                        report.summary.total_history_urls,
+                        report.summary.total_findings,
+                    );
+                    self.status_message = summary_msg;
+                    self.report = Some(*report);
+                    self.selected_profile_idx = None;
+                    self.custody_dlg.manifest = None;
+                    self.custody_dlg.status = None;
+                    self.rebuild_cache_view(ctx);
+                }
+            }
         }
     }
 
@@ -686,8 +734,8 @@ impl AppState {
             self.active_modal = ActiveModal::ExtractCache;
             self.extract_dlg.only_selected = !self.selected_rows.is_empty();
         }
-        if refresh && !self.path_input.trim().is_empty() {
-            self.start_load(PathBuf::from(self.path_input.trim()), ctx);
+        if refresh && !self.start_load_from_input(ctx) {
+            self.status_message = "No Target path entered — click Open... to select a target folder.".into();
         }
         if select_all && self.active_tab == WorkspaceTab::CacheInspector {
             self.select_all_filtered(ctx);
@@ -801,4 +849,73 @@ pub fn set_clipboard_text(text: &str) -> bool {
         return cb.set_text(text.to_string()).is_ok();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct TempDirGuard(PathBuf);
+
+    impl TempDirGuard {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("chrome2rust_gui_test_{}_{}", tag, std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn startup_does_not_force_default_directory_when_no_path_given() {
+        let state = AppState::new(LaunchArgs::default());
+        assert!(state.initial_load_path.is_none());
+        assert!(state.path_input.is_empty());
+        assert!(!state.is_loading);
+    }
+
+    #[test]
+    fn start_load_supersedes_in_flight_scan_with_selected_target_folder() {
+        let dir_first = TempDirGuard::new("first");
+        let dir_second = TempDirGuard::new("second");
+
+        let p2_cache = dir_second.0.join("Cache").join("Cache_Data");
+        std::fs::create_dir_all(&p2_cache).unwrap();
+        std::fs::write(p2_cache.join("index"), b"\0").unwrap();
+        std::fs::write(dir_second.0.join("History"), b"").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut state = AppState::new(LaunchArgs::default());
+
+        state.start_load(dir_first.0.clone(), &ctx);
+        assert!(state.is_loading);
+        assert_eq!(state.load_generation, 1);
+
+        // Selecting a second target folder while still loading must NOT be ignored.
+        state.start_load(dir_second.0.clone(), &ctx);
+        assert!(state.is_loading);
+        assert_eq!(state.load_generation, 2);
+        assert_eq!(state.path_input, dir_second.0.display().to_string());
+
+        for _ in 0..50 {
+            state.poll_worker(&ctx);
+            if !state.is_loading && state.report.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let report = state
+            .report
+            .as_ref()
+            .expect("selected target folder should finish loading");
+        assert_eq!(report.target_path, dir_second.0.display().to_string());
+    }
 }
