@@ -633,6 +633,7 @@ impl AppState {
         let mut open_props = false;
         let mut delete_sel = false;
 
+        let wants_kb = ctx.wants_keyboard_input();
         ctx.input(|i| {
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Q) {
                 toggle_filter = true;
@@ -646,7 +647,7 @@ impl AppState {
             if i.key_pressed(egui::Key::F5) {
                 refresh = true;
             }
-            if !ctx.wants_keyboard_input() {
+            if !wants_kb {
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::U) {
                     copy_urls = true;
                 }

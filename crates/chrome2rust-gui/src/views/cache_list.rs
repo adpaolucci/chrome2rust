@@ -116,8 +116,8 @@ pub fn render_cache_list(ui: &mut egui::Ui, state: &mut AppState, ctx: &egui::Co
                 let mut double_clicked_raw: Option<usize> = None;
                 let mut context_action: Option<(usize, &'static str)> = None;
 
-                let shift_down = ctx.input(|i| i.modifiers.shift);
-                let ctrl_down = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                let (shift_down, ctrl_down) =
+                    ctx.input(|i| (i.modifiers.shift, i.modifiers.ctrl || i.modifiers.command));
 
                 let mut builder = TableBuilder::new(ui)
                     .id_salt("cache_entries_table")

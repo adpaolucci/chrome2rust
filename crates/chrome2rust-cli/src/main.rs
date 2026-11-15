@@ -68,7 +68,7 @@ pub struct Cli {
     pub pick: bool,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -476,7 +476,7 @@ fn main() -> Result<()> {
     let pick = cli.pick;
     let audit_manifest = cli.audit_manifest.clone();
 
-    match cli.command {
+    match cli.command.unwrap_or(Commands::Gui(GuiArgs::default())) {
         Commands::Profiles(args) => cmd_profiles(args),
         Commands::Sniff(args) => cmd_sniff(args, pick),
         Commands::Cache { action } => match action {

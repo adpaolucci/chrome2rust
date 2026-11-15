@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-cache"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "brotli",
  "chrome2rust-core",
@@ -518,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrome2rust-cache",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-forensics"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrome2rust-cache",
  "chrome2rust-core",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrome2rust-cache",
  "chrome2rust-core",
@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "chrome2rust-report"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "cbc",

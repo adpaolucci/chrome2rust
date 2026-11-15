@@ -5,6 +5,15 @@ All notable changes to `chrome2rust` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-15
+
+### Fixed
+- **GUI Startup `RwLock` Deadlock (`chrome2rust-gui`)**: Hoisted `ctx.wants_keyboard_input()` outside `ctx.input(...)` in `AppState::handle_shortcuts` so `egui::Context` no longer self-deadlocks between an exclusive write lock and a nested read lock on Frame 0 before the Win32 window becomes visible.
+- **Windows Console Window Suppression**: Enabled `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` in `chrome2rust-gui` so launching from Windows Explorer does not open an empty background console window.
+
+### Changed
+- **Default GUI Launch on `chrome2rust`**: Running `chrome2rust` without a subcommand now launches `chrome2rust-gui` instead of exiting with a CLI usage error.
+
 ## [0.2.0] - 2026-11-15
 
 ### Changed
