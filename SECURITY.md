@@ -1,5 +1,11 @@
 # Security Policy
 
+## Supported Versions
+
+| Version | Supported |
+| :--- | :--- |
+| `0.2.x` | :white_check_mark: |
+
 Security of inspected user browser artifacts, forensic integrity verification, and read-only handling are top priorities for `chrome2rust`.
 
 If you discover a security vulnerability, parser panic, or accidental write hazard:

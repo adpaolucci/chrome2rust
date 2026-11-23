@@ -1,0 +1,29 @@
+[package]
+name = "chrome2rust-iced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cross-platform pure-Rust Iced 0.14 desktop forensic console for Google Chrome (Linux, macOS, and Windows)"
+
+[[bin]]
+name = "chrome2rust-iced"
+path = "src/main.rs"
+
+[dependencies]
+chrome2rust-core.workspace = true
+chrome2rust-cache.workspace = true
+chrome2rust-forensics.workspace = true
+chrome2rust-report.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+image.workspace = true
+tracing.workspace = true
+iced = { workspace = true, features = ["image-without-codecs"] }
+rfd.workspace = true
+arboard.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

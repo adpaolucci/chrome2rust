@@ -1,0 +1,18 @@
+name: Feature Request
+description: Suggest a new Chromium artifact parser, cache option, UI enhancement, or MCP capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem & Proposed Enhancement
+      description: Describe the forensic workflow gap or enhancement you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: Affected Surface(s)
+      description: e.g., Win32 GUI, Iced GUI, CLI, MCP Server, Report Exporter.

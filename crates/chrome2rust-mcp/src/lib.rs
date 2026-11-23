@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use chrome2rust_cache::export::{ExtractFilenameMode, ExtractOptions, extract_cache_entries};
 use chrome2rust_cache::simple::parse_simple_entry_file;
 use chrome2rust_cache::{CacheScanOptions, CacheSortField, load_cache_from_paths, sort_cache_entries};
@@ -339,7 +341,12 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
     debug!(method, "Received MCP JSON-RPC request");
 
     match method {
-        "notifications/initialized" | "notifications/cancelled" => None,
+        m if m.starts_with("notifications/") => None,
+        "ping" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {}
+        })),
         "initialize" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -517,5 +524,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(inspected["preview_text"].as_str().map(str::len), Some(4095));
+
+        let ping_resp = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "ping"
+        }))
+        .unwrap();
+        assert_eq!(ping_resp["id"], 99);
+        assert_eq!(ping_resp["result"], json!({}));
+
+        assert!(
+            handle_jsonrpc_request(&json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }))
+            .is_none()
+        );
     }
 }

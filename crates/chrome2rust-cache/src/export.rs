@@ -208,7 +208,10 @@ pub fn render_cache_export(
                 wtr.write_record(&hdr).map_err(|e| ChromeError::Export(e.to_string()))?;
             }
             for e in entries {
-                let row: Vec<String> = cols.iter().map(|c| c.value(e, show_millis)).collect();
+                let row: Vec<String> = cols
+                    .iter()
+                    .map(|c| neutralize_spreadsheet_cell(&c.value(e, show_millis)))
+                    .collect();
                 wtr.write_record(&row).map_err(|e| ChromeError::Export(e.to_string()))?;
             }
             let bytes = wtr.into_inner().map_err(|e| ChromeError::Export(e.to_string()))?;
@@ -224,7 +227,7 @@ pub fn render_cache_export(
             for e in entries {
                 let row: Vec<String> = cols
                     .iter()
-                    .map(|c| c.value(e, show_millis).replace(['\t', '\r', '\n'], " "))
+                    .map(|c| neutralize_spreadsheet_cell(&c.value(e, show_millis)).replace(['\t', '\r', '\n'], " "))
                     .collect();
                 out.push_str(&row.join("\t"));
                 out.push('\n');
@@ -292,7 +295,9 @@ pub fn render_cache_export(
         }
         ExportFormat::HtmlHorizontal => {
             let mut out = String::from(
-                "<!doctype html><html><head><meta charset=\"utf-8\"><title>Chrome Cache Export - chrome2rust</title>\
+                "<!doctype html><html><head><meta charset=\"utf-8\">\
+                <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none';\">\
+                <title>Chrome Cache Export - chrome2rust</title>\
                 <style>body{font-family:system-ui,sans-serif;margin:20px;background:#0f172a;color:#e2e8f0;}\
                 table{border-collapse:collapse;width:100%;font-size:13px;}th,td{border:1px solid #334155;padding:6px 8px;text-align:left;}\
                 th{background:#1e293b;position:sticky;top:0;}tr:nth-child(even){background:#111827;}</style></head><body>\
@@ -322,7 +327,9 @@ pub fn render_cache_export(
         }
         ExportFormat::HtmlVertical => {
             let mut out = String::from(
-                "<!doctype html><html><head><meta charset=\"utf-8\"><title>Chrome Cache Vertical Export - chrome2rust</title>\
+                "<!doctype html><html><head><meta charset=\"utf-8\">\
+                <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none';\">\
+                <title>Chrome Cache Vertical Export - chrome2rust</title>\
                 <style>body{font-family:system-ui,sans-serif;margin:20px;background:#0f172a;color:#e2e8f0;}\
                 table{border-collapse:collapse;width:100%;margin-bottom:20px;font-size:13px;}th,td{border:1px solid #334155;padding:6px 8px;text-align:left;}\
                 th{background:#1e293b;width:200px;}</style></head><body><h2>Cache Entries Export</h2>",
@@ -668,6 +675,16 @@ pub fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+fn neutralize_spreadsheet_cell(raw: &str) -> String {
+    if raw.starts_with(['=', '+', '-', '@', '\t', '\r'])
+        || raw.trim_start_matches(' ').starts_with(['=', '+', '-', '@'])
+    {
+        format!("'{raw}")
+    } else {
+        raw.to_string()
+    }
+}
+
 fn escape_xml(s: &str) -> String {
     escape_html(s)
 }
@@ -781,5 +798,36 @@ mod tests {
         assert_eq!(sanitize_filename("COM1.html"), "_COM1.html");
         assert_eq!(sanitize_filename("lpt9.png"), "_lpt9.png");
         assert_eq!(sanitize_filename("../evil\\file\0.js"), "_evil_file_.js");
+    }
+
+    #[test]
+    fn test_csv_and_tab_export_neutralize_formula_injection() {
+        let mut entry = dummy_entry("=cmd|' /C calc'!A0", Some("+evil/type"), None);
+        entry.server_name = Some("  =HYPERLINK(\"https://evil.example\",\"Go\")".to_string());
+        entry.file_signature = Some("-1+1".to_string());
+        entry.detected_extension = Some("@ext".to_string());
+
+        let cols = vec![
+            CacheColumn::Url,
+            CacheColumn::ContentType,
+            CacheColumn::ServerName,
+            CacheColumn::FileSignature,
+            CacheColumn::DetectedExtension,
+        ];
+        let entries = [entry];
+
+        let csv_out = render_cache_export(&entries, ExportFormat::Csv, &cols, true, false).unwrap();
+        assert!(csv_out.contains("'=cmd|' /C calc'!A0"));
+        assert!(csv_out.contains("'+evil/type"));
+        assert!(csv_out.contains("\"'  =HYPERLINK("));
+        assert!(csv_out.contains("'-1+1"));
+        assert!(csv_out.contains("'@ext"));
+
+        let tab_out = render_cache_export(&entries, ExportFormat::Tab, &cols, true, false).unwrap();
+        assert!(tab_out.contains("'=cmd|' /C calc'!A0"));
+        assert!(tab_out.contains("'+evil/type"));
+        assert!(tab_out.contains("'  =HYPERLINK("));
+        assert!(tab_out.contains("'-1+1"));
+        assert!(tab_out.contains("'@ext"));
     }
 }

@@ -5,14 +5,19 @@ All notable changes to `chrome2rust` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - 2026-11-15
+## [0.2.2] - 2026-11-19
+
+### Changed
+- **Dual-GUI Architecture (`chrome2rust-win32` + `chrome2rust-iced`)**: Replaced immediate-mode `eframe`/`egui` (`chrome2rust-gui`) with two specialized pure-Rust frontends: **`chrome2rust-win32`** (`winsafe 0.0.29`, zero-GPU native Win32 Common Controls v6, Per-Monitor DPI v2 manifest, embedded `app.ico`, COM dialogs) as the Windows default, and **`chrome2rust-iced`** (`iced 0.14` with `wgpu` + `tiny-skia` software rendering fallback and RGBA window icon) for Linux, macOS, and Windows (`chrome2rust gui --iced`).
+- **Apache-2.0 Licensing & Attribution**: Standardized repository license to `Apache-2.0` (`LICENSE`, `NOTICE`, `Cargo.toml`, `smithery.yaml`, `README.md`) matching `robocopy2rust`.
+- **MSRV `1.88`, Supply-Chain Audit & Packaging**: Pinned workspace `rust-version = "1.88"`, added `deny.toml` + `cargo-deny` CI job, Dependabot (`dependabot.yml`), GitHub issue/PR templates, updated GitHub Actions (`checkout@v7`, `upload-artifact@v7`, `download-artifact@v8`, `action-gh-release@v3`), and added ready-to-submit WinGet & Homebrew manifests in `packaging/`.
 
 ### Fixed
-- **Target Folder Selection & Worker Superseding (`chrome2rust-gui`)**: Removed automatic Frame-0 loading of the default local Chrome `User Data` directory when launching without a `PATH` argument, and replaced the `is_loading` early return in `AppState::start_load` with monotonically versioned `load_generation` tracking so selecting a target folder via `Open...`, `File -> Open...`, or the `Target:` bar always takes precedence over any in-flight scan.
+- **Target Folder Selection & Worker Superseding (`chrome2rust-win32`, `chrome2rust-iced`)**: Removed automatic Frame-0 loading of the default local Chrome `User Data` directory when launching without a `PATH` argument, and implemented monotonically versioned `load_generation` tracking so selecting a target folder always supersedes any in-flight scan.
 - **Custom / Partial Target Folder Resolution (`chrome2rust-core`)**: Expanded `looks_like_profile_dir` and `resolve_target_path` to recognize modern `Network/Cookies`, `Login Data`, `Sessions`, `Local Storage/leveldb`, `Session Storage`, `IndexedDB`, and nested container folders (up to depth 3), and increased the `is_cache_data_dir` directory entry scan window.
 
 ### Added
-- **GUI Target Controls & `--pick` Support (`chrome2rust-gui`, `chrome2rust-cli`)**: Added a `Load` button next to the `Target:` input bar, initial directory seeding for folder picker dialogs, one-click `Browse Target Folder...` and detected local browser shortcuts in the Console Tree when no target is loaded, and `--pick`/`--browse` support when launching `chrome2rust-gui` or `chrome2rust gui`.
+- **Dual-GUI CLI Launcher & `--pick` Support (`chrome2rust-cli`)**: Running `chrome2rust` without arguments or `chrome2rust gui` launches `chrome2rust-win32` on Windows and `chrome2rust-iced` on Unix or via `--iced`, forwarding `[PATH]`, `--pick`/`--browse`, `--decrypt`, and `--key`.
 
 ## [0.2.1] - 2026-11-15
 

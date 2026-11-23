@@ -4,24 +4,25 @@ Thank you for your interest in contributing to `chrome2rust`!
 
 ## Code Architecture
 
-The workspace is organized into modular crates:
+The workspace is organized into 8 modular crates:
 - `crates/chrome2rust-core`: Core models, timestamps, profile/path discovery, SQLite safe snapshot reader, optional decryption primitives, and `tracing` logging setup.
 - `crates/chrome2rust-cache`: Dual-backend Chrome HTTP cache readers (`Simple Cache` & `Blockfile`), `HttpResponseInfo` pickle decoder, decompression, extraction, deletion, and multi-format table exporter.
 - `crates/chrome2rust-forensics`: Read-only Chrome `User Data` artifact analyzers (`History`, `Cookies`, `Login Data`, `Web Data`, `Bookmarks`, `Preferences`, `Extensions`, `Sessions` SNSS, `LevelDB` storage), cross-artifact findings, timeline, and SHA-256 chain-of-custody manifests.
 - `crates/chrome2rust-report`: Air-gapped interactive HTML, JSON, and Markdown forensic report generators.
-- `crates/chrome2rust-mcp`: Model Context Protocol (MCP) stdio server for AI agents and forensic workflows.
-- `crates/chrome2rust-cli`: Unified command-line interface binary (`chrome2rust`).
-- `crates/chrome2rust-gui`: Native cross-platform Classic Win32/MMC management console GUI (`chrome2rust-gui`).
+- `crates/chrome2rust-mcp`: Model Context Protocol (MCP) stdio server for AI agents and forensic workflows (`chrome2rust-mcp`).
+- `crates/chrome2rust-cli`: Unified command-line interface binary (`chrome2rust`) that launches `chrome2rust-win32` (Windows default) or `chrome2rust-iced` (Linux/macOS or `--iced`) when invoked with no arguments.
+- `crates/chrome2rust-win32`: Native zero-GPU Win32 desktop forensic console built on `winsafe` (`chrome2rust-win32`).
+- `crates/chrome2rust-iced`: Cross-platform retained-mode desktop forensic console built on `iced` (`chrome2rust-iced`).
 
 ## Development Workflow
 
 1. Fork and clone the repository.
-2. Ensure you have a recent stable Rust toolchain installed (`rustup update stable`).
+2. Ensure you have a recent stable Rust toolchain installed (`rustup update stable`, MSRV `1.88+`).
 3. Create a feature branch (`git checkout -b feature/my-enhancement`).
 4. Run checks, linter, and tests:
    ```bash
    cargo check --workspace --all-targets
-   cargo fmt -- --check
+   cargo fmt --all -- --check
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    ```

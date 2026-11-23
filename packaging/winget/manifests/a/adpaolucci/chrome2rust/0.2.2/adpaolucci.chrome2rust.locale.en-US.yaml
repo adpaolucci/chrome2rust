@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+
+PackageIdentifier: adpaolucci.chrome2rust
+PackageVersion: 0.2.2
+PackageLocale: en-US
+Publisher: adpaolucci
+PublisherUrl: https://github.com/adpaolucci
+PublisherSupportUrl: https://github.com/adpaolucci/chrome2rust/issues
+PackageName: Chrome2Rust
+PackageUrl: https://chrome2rust.guap.ca
+License: Apache-2.0
+LicenseUrl: https://github.com/adpaolucci/chrome2rust/blob/main/LICENSE
+Copyright: Copyright (c) 2026 adpaolucci
+ShortDescription: 100% pure-Rust native Win32 (WinSafe) and Iced Chrome cache inspector, User Data forensic workstation, CLI, and MCP server.
+Description: >-
+  chrome2rust is a pure-Rust read-only Google Chrome and Chromium HTTP cache inspector (Simple Cache & Blockfile)
+  and User Data forensic suite featuring a native zero-GPU Win32 desktop console (chrome2rust-win32 via WinSafe),
+  a cross-platform Iced GUI (chrome2rust-iced), a full CLI, air-gapped HTML/JSON/Markdown forensic reports,
+  RFC 6234 SHA-256 Merkle chain-of-custody manifests, and a JSON-RPC 2.0 stdio MCP server.
+Moniker: chrome2rust
+Tags:
+  - chrome
+  - forensics
+  - cache
+  - win32
+  - rust
+  - cli
+  - gui
+  - mcp
+ReleaseNotesUrl: https://github.com/adpaolucci/chrome2rust/releases/tag/v0.2.2
+Documentations:
+  - DocumentLabel: Project Hub & Documentation
+    DocumentUrl: https://chrome2rust.guap.ca
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

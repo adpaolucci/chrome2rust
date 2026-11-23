@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use anyhow::{Context, Result, anyhow, bail};
 use chrome2rust_cache::export::{
     CacheColumn, ExportFormat, ExtractFilenameMode, ExtractOptions, extract_cache_entries, render_cache_export,
@@ -48,7 +50,7 @@ pub fn init_signal_handler() {
     author = "Chrome2Rust Contributors",
     version,
     about = "Universal high-performance Google Chrome HTTP cache inspector and User Data forensic suite in 100% pure Rust",
-    long_about = "Analyze Google Chrome / Chromium HTTP caches (Simple Cache & Blockfile) and complete User Data directories in pure Rust.\n\nUse subcommands (`profiles`, `sniff`, `cache`, `analyze`, `report`, `custody`, `mcp`, `gui`) or launch `chrome2rust-gui` for the desktop workstation."
+    long_about = "Analyze Google Chrome / Chromium HTTP caches (Simple Cache & Blockfile) and complete User Data directories in pure Rust.\n\nInvoke without arguments or run `chrome2rust gui` to launch the native desktop forensic console (`chrome2rust-win32` on Windows, `chrome2rust-iced` on Linux/macOS or via `--iced`)."
 )]
 pub struct Cli {
     /// Logging verbosity level (error, warn, info, debug, trace)
@@ -97,18 +99,22 @@ pub enum Commands {
     /// Launch native host OS file/folder picker dialog and output the selected path
     Pick(PickArgs),
 
-    /// Launch the pure-Rust native Win32/MMC desktop GUI console (`chrome2rust-gui`)
+    /// Launch the desktop forensic GUI (`chrome2rust-win32` on Windows, `chrome2rust-iced` on Linux/macOS or with `--iced`)
     Gui(GuiArgs),
 
     /// Run Model Context Protocol (MCP) server over standard I/O (JSON-RPC)
     Mcp(McpArgs),
 }
 
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, Clone)]
 pub struct GuiArgs {
     /// Optional User Data, Profile, or Cache directory to open immediately
     #[arg(value_name = "PATH")]
     pub path: Option<PathBuf>,
+
+    /// Launch the cross-platform Iced GUI instead of the Windows-native Win32 GUI
+    #[arg(long)]
+    pub iced: bool,
 
     /// Enable optional best-effort decryption (for Cookies / Login Data)
     #[arg(long)]
@@ -1285,22 +1291,33 @@ fn cmd_pick(args: PickArgs) -> Result<()> {
 }
 
 fn cmd_gui(args: GuiArgs, pick: bool) -> Result<()> {
-    println!("Launching Chrome2Rust Management Console (Pure-Rust native GUI)...");
-    let current_exe = std::env::current_exe().unwrap_or_default();
-    let parent_dir = current_exe.parent().unwrap_or_else(|| Path::new(""));
-    let gui_exe_name = if cfg!(windows) {
-        "chrome2rust-gui.exe"
-    } else {
-        "chrome2rust-gui"
-    };
-    let candidate_path = parent_dir.join(gui_exe_name);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
 
-    let mut cmd = if candidate_path.exists() {
-        std::process::Command::new(candidate_path)
-    } else {
-        std::process::Command::new(gui_exe_name)
+    let resolve_candidate = |bin_name: &str| -> PathBuf {
+        exe_dir
+            .as_ref()
+            .map(|d| d.join(bin_name))
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| PathBuf::from(bin_name))
     };
 
+    let candidate = if cfg!(windows) && !args.iced {
+        let win32_bin = resolve_candidate("chrome2rust-win32.exe");
+        let iced_bin = resolve_candidate("chrome2rust-iced.exe");
+        if win32_bin.is_file() || !iced_bin.is_file() {
+            win32_bin
+        } else {
+            iced_bin
+        }
+    } else if cfg!(windows) {
+        resolve_candidate("chrome2rust-iced.exe")
+    } else {
+        resolve_candidate("chrome2rust-iced")
+    };
+
+    let mut cmd = std::process::Command::new(&candidate);
     if let Some(path) = &args.path {
         cmd.arg(path);
     } else if pick {
@@ -1313,12 +1330,8 @@ fn cmd_gui(args: GuiArgs, pick: bool) -> Result<()> {
         cmd.arg("--key").arg(k);
     }
 
-    let status = cmd.status().context(
-        "Failed to spawn `chrome2rust-gui`. Build with `cargo build -p chrome2rust-gui` or ensure it is on PATH.",
-    )?;
-    if !status.success() {
-        eprintln!("Chrome2Rust GUI exited with status: {:?}", status.code());
-    }
+    cmd.spawn()
+        .with_context(|| format!("Failed to launch GUI executable {}", candidate.display()))?;
     Ok(())
 }
 
@@ -1420,5 +1433,33 @@ pub fn default_target_kind_label(k: &TargetKind) -> &'static str {
         TargetKind::UserDataRoot => "User Data Root",
         TargetKind::ProfileDir => "Profile Directory",
         TargetKind::CacheDir => "Cache Directory",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_parses_gui_iced_decrypt_and_key_flags() {
+        let cli = Cli::try_parse_from([
+            "chrome2rust",
+            "gui",
+            "--iced",
+            "--decrypt",
+            "--key",
+            "secret",
+            r"C:\ChromeData",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Gui(g)) => {
+                assert!(g.iced);
+                assert!(g.decrypt);
+                assert_eq!(g.keys, vec!["secret"]);
+                assert_eq!(g.path, Some(PathBuf::from(r"C:\ChromeData")));
+            }
+            other => panic!("Unexpected command: {other:?}"),
+        }
     }
 }

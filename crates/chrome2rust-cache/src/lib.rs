@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod blockfile;
 pub mod decompress;
 pub mod export;

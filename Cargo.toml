@@ -7,20 +7,22 @@ members = [
     "crates/chrome2rust-report",
     "crates/chrome2rust-mcp",
     "crates/chrome2rust-cli",
-    "crates/chrome2rust-gui",
+    "crates/chrome2rust-win32",
+    "crates/chrome2rust-iced",
 ]
 
 [workspace.package]
 version = "0.2.2"
 edition = "2024"
-license = "MIT"
+rust-version = "1.88"
+license = "Apache-2.0"
 repository = "https://github.com/adpaolucci/chrome2rust"
 homepage = "https://chrome2rust.guap.ca"
 documentation = "https://chrome2rust.guap.ca"
 authors = ["Chrome2Rust Contributors"]
-description = "Blazing-fast, memory-safe Google Chrome cache inspection and User Data forensic workstation in 100% pure Rust"
+description = "100% pure-Rust native Win32 (WinSafe) & cross-platform Iced Google Chrome cache inspector, User Data forensic workstation, CLI, and MCP server"
 keywords = ["chrome", "forensics", "cache", "mcp", "merkle"]
-categories = ["command-line-utilities", "development-tools"]
+categories = ["command-line-utilities", "gui", "development-tools"]
 
 [workspace.dependencies]
 chrome2rust-core = { path = "crates/chrome2rust-core" }
@@ -59,9 +61,9 @@ clap = { version = "4.6", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ctrlc = "3.4"
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-egui_extras = { version = "0.33", features = ["all_loaders"] }
-rfd = "0.17"
+winsafe = { version = "0.0.29", features = ["gui", "shell"] }
+iced = { version = "0.14", features = ["wgpu", "tiny-skia", "tokio"] }
+rfd = "0.18"
 arboard = "3.6"
 
 [profile.dev.package.clap]

@@ -426,6 +426,8 @@ fn test_full_user_data_analysis_and_reports() {
     }
 
     let html_content = std::fs::read_to_string(&written[0]).unwrap();
+    assert!(html_content.contains("Content-Security-Policy"));
+    assert!(html_content.contains("default-src 'none'"));
     assert!(html_content.contains("chrome2rust Forensic Report"));
     assert!(html_content.contains("orphan.example.org"));
     assert!(html_content.contains("image/webp"));
@@ -462,6 +464,10 @@ fn test_cache_export_formats_extraction_and_delete() {
         ExportFormat::Json,
     ] {
         let rendered = render_cache_export(&entries, fmt, &cols, true, false).unwrap();
+        if matches!(fmt, ExportFormat::HtmlHorizontal | ExportFormat::HtmlVertical) {
+            assert!(rendered.contains("Content-Security-Policy"));
+            assert!(rendered.contains("default-src 'none'"));
+        }
         assert!(rendered.contains("orphan.example.org"));
         assert!(rendered.contains("portal.example.org"));
         assert!(rendered.contains("image/webp"));

@@ -1,15 +1,20 @@
 # `chrome2rust` — High-Fidelity Google Chrome Cache Inspector & User Data Forensic Suite in Pure Rust
 
-Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentation: https://chrome2rust.guap.ca**](https://chrome2rust.guap.ca)
+Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentation: https://chrome2rust.guap.ca**](https://chrome2rust.guap.ca) • [**Project Wiki**](https://github.com/adpaolucci/chrome2rust/wiki)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust: 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange.svg)](Cargo.toml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/adpaolucci/chrome2rust/actions/workflows/ci.yml/badge.svg)](https://github.com/adpaolucci/chrome2rust/actions/workflows/ci.yml)
+[![Rust: 2024](https://img.shields.io/badge/Rust-2024%20(1.88%2B)-orange.svg)](Cargo.toml)
 [![Forensics: Read-Only](https://img.shields.io/badge/Forensics-Read--Only%20Snapshots-success.svg)](crates/chrome2rust-forensics)
-[![Architecture: 7 Crates](https://img.shields.io/badge/Workspace-7%20Crates-emerald.svg)](Cargo.toml)
+[![Architecture: 8 Crates](https://img.shields.io/badge/Workspace-8%20Crates-emerald.svg)](Cargo.toml)
+[![GUI: WinSafe Win32 + Iced 0.14](https://img.shields.io/badge/GUI-WinSafe%20Win32%20%2B%20Iced%200.14-cyan.svg)](crates/chrome2rust-win32)
 [![MCP: stdio JSON-RPC](https://img.shields.io/badge/MCP-stdio%20JSON--RPC%202.0-purple.svg)](crates/chrome2rust-mcp)
-[![GUI: Win32 MMC](https://img.shields.io/badge/GUI-Win32%20MMC%20(egui)-cyan.svg)](crates/chrome2rust-gui)
 
-**`chrome2rust`** is an ultra-fast, memory-safe, read-only cross-platform Chromium-family cache inspection and `User Data` forensic workstation written in **100% pure Rust**. Developed by **Andrew Paolucci**, it parses both **Simple Cache** and legacy **Blockfile Cache** backends alongside every major Chromium profile database (**History**, **Downloads**, **Cookies**, **Login Data**, **Web Data**, **Preferences**, **Extensions**, **Bookmarks**, **SNSS Sessions/Tabs**, **LevelDB Local/Session Storage**, and **IndexedDB**), producing unified chronological timelines, cross-artifact intelligence findings, SHA-256 chain-of-custody Merkle manifests, and air-gapped HTML/JSON/Markdown forensic report bundles.
+Ready-to-submit **WinGet** & **Homebrew** manifests live in [`packaging/`](packaging/README.md).
+
+**`chrome2rust`** is an ultra-fast, memory-safe, read-only cross-platform Chromium-family cache inspection and `User Data` forensic workstation written in **100% pure Rust**. Developed by **Andrew Paolucci**, it ships **two specialized pure-Rust desktop GUIs** alongside the CLI and MCP server:
+1. **`chrome2rust-win32`** (**WinSafe `0.0.29`**) — Zero-GPU authentic native Win32 Common Controls GUI (ComCtl v6, Per-Monitor DPI v2, Vista+ COM dialogs), engineered for Windows Desktops, forensic triage over **Windows Server RDP**, and Hyper-V/VMware VMs.
+2. **`chrome2rust-iced`** (**Iced `0.14`**) — Consistent cross-platform retained-mode GUI (`wgpu` + `tiny-skia` CPU fallback) shipping on **Linux**, **macOS**, and **Windows** (`chrome2rust gui --iced`).
 
 ---
 
@@ -23,7 +28,7 @@ Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentatio
 | **Payload Magic Carving** | **60+ binary signatures with `Content-Type` mismatch detection** | Extension guessing from URL query | Basic MIME classification |
 | **Locked Profile Snapshots** | **Non-destructive atomic WAL/SHM copying (zero mutation)** | Fails on locked files or locks DB | Copy without active WAL merge |
 | **AI Agent Integration** | **Native `stdio` Model Context Protocol (MCP) server (8 tools)** | None | None |
-| **Desktop GUI Console** | **Classic Win32 MMC (`chrome2rust-gui`, 0 MB WebView/Electron)** | Classic Win32 MFC (Windows-only) | Local web server in default browser |
+| **Desktop GUI Console** | **Dual Pure-Rust GUIs: Native Win32 (`winsafe`) + Cross-Platform Iced `0.14` (`tiny-skia` fallback)** | Classic Win32 MFC (Windows-only) | Local web server in default browser |
 | **Throughput & Footprint** | **> 50,000 entries/sec • < 25 MB static RAM** | Fast, but Windows-only | 100–500 MB RAM (Python GC overhead) |
 | **Chain of Custody** | **RFC 6234 Balanced Binary Merkle Tree Root Hash** | Basic file hash list | Custom SQLite export log |
 
@@ -42,7 +47,7 @@ Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentatio
 | **Chain-of-Custody Merkle Audits** | Computes deterministic per-artifact SHA-256 digests and balanced binary RFC 6234 Merkle roots exported as CSV or JSON (`--audit-manifest` / `chrome2rust custody`) |
 | **Air-Gapped Forensic Reports** | Self-contained HTML (zero external CDN requests, interactive dark/light theme, SVG charts, sortable tables), JSON, and Markdown bundles |
 | **Model Context Protocol (MCP)** | Built-in JSON-RPC 2.0 `stdio` MCP server (`chrome2rust mcp` & `chrome2rust-mcp`) exposing structured profile discovery, cache inspection, forensic analysis, reporting, and custody tools to AI agents |
-| **Native Pure-Rust Desktop GUI** | Classic Win32/MMC administrative management console (`chrome2rust-gui`) with zero WebView, Electron, or Node.js dependencies |
+| **Native Pure-Rust Dual GUIs** | Native WinSafe Win32 (`chrome2rust-win32`) on Windows + cross-platform Iced 0.14 (`chrome2rust-iced`) on Linux, macOS, and Windows (`--iced`) — zero WebView, Electron, or Node.js dependencies |
 
 ---
 
@@ -52,12 +57,12 @@ Self-contained native executables with **zero external runtime dependencies** ar
 
 | Platform | Target Architecture | Distribution Package | Included Binaries |
 | :--- | :--- | :--- | :--- |
-| **Windows (64-bit)** | `x86_64-pc-windows-msvc` | [**`chrome2rust-x86_64-pc-windows-msvc.zip`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-pc-windows-msvc.zip) | `chrome2rust.exe`, `chrome2rust-gui.exe`, `chrome2rust-mcp.exe` |
-| **Linux (64-bit)** | `x86_64-unknown-linux-gnu` | [**`chrome2rust-x86_64-unknown-linux-gnu.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-unknown-linux-gnu.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
-| **macOS Apple Silicon** | `aarch64-apple-darwin` (M1–M4) | [**`chrome2rust-aarch64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-aarch64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
-| **macOS Intel** | `x86_64-apple-darwin` | [**`chrome2rust-x86_64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp` |
+| **Windows (64-bit)** | `x86_64-pc-windows-msvc` | [**`chrome2rust-x86_64-pc-windows-msvc.zip`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-pc-windows-msvc.zip) | `chrome2rust.exe`, `chrome2rust-win32.exe`, `chrome2rust-iced.exe`, `chrome2rust-mcp.exe` |
+| **Linux (64-bit)** | `x86_64-unknown-linux-gnu` | [**`chrome2rust-x86_64-unknown-linux-gnu.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-unknown-linux-gnu.tar.gz) | `chrome2rust`, `chrome2rust-iced`, `chrome2rust-mcp` |
+| **macOS Apple Silicon** | `aarch64-apple-darwin` (M1–M4) | [**`chrome2rust-aarch64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-aarch64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-iced`, `chrome2rust-mcp` |
+| **macOS Intel** | `x86_64-apple-darwin` | [**`chrome2rust-x86_64-apple-darwin.tar.gz`**](https://github.com/adpaolucci/chrome2rust/releases/latest/download/chrome2rust-x86_64-apple-darwin.tar.gz) | `chrome2rust`, `chrome2rust-iced`, `chrome2rust-mcp` |
 
-> Every release archive includes cryptographic `SHA256SUMS.txt` checksums alongside `chrome2rust` (CLI), `chrome2rust-gui` (Win32/MMC Desktop Console), and `chrome2rust-mcp` (MCP server).
+> Every release archive includes cryptographic `SHA256SUMS.txt` checksums alongside `chrome2rust` (CLI), `chrome2rust-win32` (Windows Native Win32 Console), `chrome2rust-iced` (Cross-Platform Iced Console), and `chrome2rust-mcp` (MCP server).
 
 ---
 
@@ -65,8 +70,10 @@ Self-contained native executables with **zero external runtime dependencies** ar
 
 ```text
 chrome2rust/
-├── Cargo.toml                         # Workspace root manifest (7 modular crates)
+├── Cargo.toml                         # Workspace root manifest (8 modular crates, MSRV 1.88, Apache-2.0)
+├── deny.toml                          # cargo-deny v2 supply-chain & license audit policy
 ├── mcp.json                           # Standard MCP server client configuration
+├── packaging/                         # WinGet & Homebrew package manager manifests
 ├── crates/
 │   ├── chrome2rust-core/              # Foundation: discovery, format sniffer, crypto, WAL-safe SQLite snapshots, time, tracing logging
 │   ├── chrome2rust-cache/             # Simple Cache (*_0/*_1) & Blockfile (data_0..3, f_*) parsers, HttpResponseInfo pickles, codecs, 8-format exporter
@@ -74,8 +81,9 @@ chrome2rust/
 │   ├── chrome2rust-report/            # Self-contained offline HTML, JSON, and Markdown forensic report generators + end-to-end integration tests
 │   ├── chrome2rust-mcp/               # Model Context Protocol (MCP) JSON-RPC 2.0 stdio server & standalone `chrome2rust-mcp` binary
 │   ├── chrome2rust-cli/               # Unified CLI engine (`chrome2rust`): profiles, sniff, cache, analyze, report, custody, pick, gui, mcp
-│   └── chrome2rust-gui/               # Native Classic Win32/MMC desktop forensic workstation (`chrome2rust-gui`)
-└── .github/workflows/                 # Cross-platform CI (`fmt`, `clippy`, `test`, `release`) and GitHub Release packaging
+│   ├── chrome2rust-win32/             # Native zero-GPU Win32 desktop console on WinSafe 0.0.29 (`chrome2rust-win32`)
+│   └── chrome2rust-iced/              # Cross-platform Iced 0.14 desktop console (`chrome2rust-iced`: Linux, macOS, Windows)
+└── .github/workflows/                 # Cross-platform CI (`fmt`, `clippy`, `test`, `cargo-deny`, `release`) and GitHub Release packaging
 ```
 
 ---
@@ -104,7 +112,7 @@ Automatically locates installed profiles across **Google Chrome**, **Chromium**,
 
 ### Prerequisites
 - [Rust toolchain](https://rustup.rs/) (1.88 or newer / edition 2024).
-- On Linux desktop builds of `chrome2rust-gui`: standard X11/Wayland/OpenGL development packages (`libssl-dev`, `libgtk-3-dev`, `libx11-dev`, `libgl1-mesa-dev`, `libwayland-dev`, `libxkbcommon-dev`).
+- On Linux desktop builds of `chrome2rust-iced`: standard fontconfig/X11/Wayland/OpenGL development packages (`libssl-dev`, `libfontconfig1-dev`, `libgtk-3-dev`, `libx11-dev`, `libgl1-mesa-dev`, `libwayland-dev`, `libxkbcommon-dev`).
 
 ### Build Release Binaries
 ```bash
@@ -115,7 +123,7 @@ cd chrome2rust
 # Run all workspace unit and integration tests
 cargo test --workspace
 
-# Build optimized release binaries (`chrome2rust`, `chrome2rust-gui`, `chrome2rust-mcp`)
+# Build optimized release binaries (`chrome2rust`, `chrome2rust-win32`, `chrome2rust-iced`, `chrome2rust-mcp`)
 cargo build --workspace --release
 ```
 
@@ -124,13 +132,18 @@ cargo build --workspace --release
 cargo build --release -p chrome2rust-cli -p chrome2rust-mcp
 ```
 
-### Launch Native Desktop Console
+### Launch Dual Desktop Consoles (`chrome2rust-win32` & `chrome2rust-iced`)
 ```bash
-# Via CLI launcher:
+# Default launch: `chrome2rust-win32` on Windows, `chrome2rust-iced` on Linux/macOS
+chrome2rust
 chrome2rust gui
 
-# Or pre-load a target directory directly:
-chrome2rust-gui "/path/to/Chrome/User Data"
+# Launch the cross-platform Iced 0.14 GUI explicitly on Windows (supports `ICED_BACKEND=tiny-skia`)
+chrome2rust gui --iced
+
+# Or invoke a desktop binary directly with a target directory:
+chrome2rust-win32 "C:\Users\Alice\AppData\Local\Google\Chrome\User Data"
+chrome2rust-iced "/path/to/Chrome/User Data"
 ```
 
 ---
@@ -248,9 +261,15 @@ Client configuration ([`mcp.json`](mcp.json)):
 
 ---
 
+## Security Hardening & Supply Chain
+
+- **`#![forbid(unsafe_code)]` Core & Tooling**: Compiled with `#![forbid(unsafe_code)]` across `core`, `cache`, `forensics`, `report`, `mcp`, `cli`, and `iced` (`unsafe` isolated strictly to native Win32 windowing calls in `chrome2rust-win32`).
+- **Air-Gapped HTML Report & Export CSP**: Generated forensic reports and cache HTML exports enforce `Content-Security-Policy: default-src 'none'; ...` with zero network dependencies.
+- **MSVC Binary Mitigations & SBOM**: Windows `x86_64` MSVC release builds combine `/STACK:16777216`, Control Flow Guard (`-C control-flow-guard=on`), and CET Shadow Stack (`/CETCOMPAT`), and all release archives ship `SBOM-crates.txt` (`cargo tree --workspace --locked`).
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE) (see also [NOTICE](NOTICE)).
 
 
 ---
@@ -260,4 +279,4 @@ MIT — see [LICENSE](LICENSE).
 - **Andrew Paolucci (@adpaolucci)** &mdash; Project Creator, Systems Architect & Lead Software Developer.
 - **Antigravity (Google DeepMind)** &mdash; Agentic AI Technical Collaborator (MCP server, multi-codec decompression pipeline, Simple Cache stream verification).
 - **Chromium Open Source Project** &mdash; Specifications for Simple Cache, Blockfile, and Chromium User Data profiles.
-- **Rust Ecosystem & Community** &mdash; Maintainers of `eframe`/`egui`, `rusqlite`, `brotli`, `ruzstd`, `snap`, and `clap`.
+- **Rust Ecosystem & Community** &mdash; Maintainers of `winsafe`, `iced`, `rusqlite`, `brotli`, `ruzstd`, `snap`, and `clap`.

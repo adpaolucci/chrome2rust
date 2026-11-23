@@ -1,8 +1,22 @@
 {
-  "name": "Chrome2Rust Forensic Studio Desktop",
-  "description": "High-fidelity Google Chrome cache inspector & User Data forensic suite in pure Rust with read-only WAL/SHM snapshots and Model Context Protocol (MCP) server.",
+  "name": "Chrome2Rust Forensic Workstation",
+  "version": "0.2.2",
+  "description": "100% pure-Rust native Win32 (WinSafe) & cross-platform Iced forensic workstation, HTTP cache inspector, CLI, and MCP server for Google Chrome.",
+  "repository": "https://github.com/adpaolucci/chrome2rust",
+  "homepage": "https://chrome2rust.guap.ca",
+  "license": "Apache-2.0",
+  "binaries": [
+    "chrome2rust",
+    "chrome2rust-win32",
+    "chrome2rust-iced",
+    "chrome2rust-mcp"
+  ],
   "requestFramePermissions": [],
   "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+    "Simple Cache & Blockfile HTTP cache inspection and extraction",
+    "Chromium User Data forensics (History, Cookies, Downloads, Logins, Extensions, Sessions, Storage)",
+    "Cross-platform OS keyring decryption & SHA-256 Merkle chain of custody",
+    "Native Win32 (WinSafe) & Iced 0.14 dual GUIs",
+    "8-tool read-only MCP JSON-RPC stdio server"
   ]
 }

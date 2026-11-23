@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use chrome2rust_mcp::{SERVER_NAME, SERVER_VERSION, get_tools_manifest, run_stdio_server};
 use clap::Parser;
 use std::process;
