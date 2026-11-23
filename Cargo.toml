@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.2.2"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "Apache-2.0"
 repository = "https://github.com/adpaolucci/chrome2rust"
 homepage = "https://chrome2rust.guap.ca"
@@ -36,7 +36,7 @@ thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.34", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 flate2 = "1.1"
 brotli = "9.1"
 ruzstd = "0.9"
@@ -52,7 +52,7 @@ cbc = "0.1"
 x509-parser = "0.18"
 walkdir = "2.5"
 regex = "1.13"
-url = "2.5"
+url = "2.5.9"
 csv = "1.4"
 dirs = "7.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
