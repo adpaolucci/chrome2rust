@@ -21,6 +21,13 @@ const IDM_LOAD_DEFAULT_BROWSER: u16 = 4002;
 const IDM_EXTRACT_CACHE: u16 = 4003;
 const IDM_EXPORT_CSV: u16 = 4004;
 const IDM_EXPORT_JSON: u16 = 4005;
+const IDM_EXPORT_TSV: u16 = 4011;
+const IDM_EXPORT_TABULAR: u16 = 4012;
+const IDM_EXPORT_TEXT: u16 = 4013;
+const IDM_EXPORT_HTML_H: u16 = 4014;
+const IDM_EXPORT_HTML_V: u16 = 4015;
+const IDM_EXPORT_XML: u16 = 4016;
+const IDM_EXPORT_URLS: u16 = 4017;
 const IDM_REPORT_HTML: u16 = 4006;
 const IDM_REPORT_JSON: u16 = 4007;
 const IDM_REPORT_MD: u16 = 4008;
@@ -38,6 +45,9 @@ const IDM_TOGGLE_MILLIS: u16 = 4031;
 const IDM_PREVIEW_AUTO: u16 = 4032;
 const IDM_PREVIEW_HEADERS: u16 = 4033;
 const IDM_PREVIEW_HEX: u16 = 4034;
+const IDM_TOGGLE_DETECTED_EXT: u16 = 4035;
+const IDM_TOGGLE_WEBSITE_DIRS: u16 = 4036;
+const IDM_TOGGLE_PEANUTS: u16 = 4037;
 
 const IDM_CUSTODY_AUDIT: u16 = 4040;
 const IDM_TAB_BASE: u16 = 4050;
@@ -584,8 +594,36 @@ fn build_main_menu() -> w::SysResult<w::HMENU> {
             text: "Export Cache Table (CSV)...",
         },
         w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_TSV,
+            text: "Export Cache Table (TSV)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_TABULAR,
+            text: "Export Cache Table (Tabular Text)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_TEXT,
+            text: "Export Cache Table (Plain Text Cards)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_HTML_H,
+            text: "Export Cache Table (HTML Horizontal)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_HTML_V,
+            text: "Export Cache Table (HTML Vertical)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_XML,
+            text: "Export Cache Table (XML)...",
+        },
+        w::MenuItem::Entry {
             cmd_id: IDM_EXPORT_JSON,
             text: "Export Cache Table (JSON)...",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_EXPORT_URLS,
+            text: "Export Cache URLs (.txt)...",
         },
         w::MenuItem::Separator,
         w::MenuItem::Entry {
@@ -645,6 +683,19 @@ fn build_main_menu() -> w::SysResult<w::HMENU> {
         w::MenuItem::Entry {
             cmd_id: IDM_TOGGLE_MILLIS,
             text: "Toggle Milliseconds in Timestamps",
+        },
+        w::MenuItem::Separator,
+        w::MenuItem::Entry {
+            cmd_id: IDM_TOGGLE_DETECTED_EXT,
+            text: "Extraction: Toggle Prefer Detected Extension",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_TOGGLE_WEBSITE_DIRS,
+            text: "Extraction: Toggle Website Directory Hierarchy",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_TOGGLE_PEANUTS,
+            text: "Decryption: Toggle Linux 'peanuts' Fallback",
         },
         w::MenuItem::Separator,
         w::MenuItem::Entry {
@@ -770,7 +821,7 @@ pub fn run(launch: LaunchArgs) -> anyhow::Result<()> {
     let btn_extract = btn(&wnd, "Extract...", 684, 8, 78, 24, (gui::Horz::Repos, gui::Vert::None));
     let btn_export = btn(
         &wnd,
-        "Export CSV...",
+        "Export Table...",
         766,
         8,
         92,
@@ -1988,6 +2039,92 @@ impl Win32App {
         }
     }
 
+    fn trigger_export_any(&self) {
+        let sel = self.selected_cache_row_indices();
+        let filters = [
+            ("CSV (*.csv)", "*.csv"),
+            ("TSV (*.tsv)", "*.tsv"),
+            ("JSON (*.json)", "*.json"),
+            ("HTML Table (*.html)", "*.html"),
+            ("XML (*.xml)", "*.xml"),
+            ("Tabular Text (*.txt)", "*.txt"),
+        ];
+        if let Ok(Some(dest)) = pick_save_file(
+            self.wnd.hwnd(),
+            "Export Chrome Cache Table",
+            "chrome_cache_export.csv",
+            "csv",
+            &filters,
+        ) {
+            let ext = dest
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let fmt = match ext.as_str() {
+                "tsv" => ExportFormat::Tab,
+                "json" => ExportFormat::Json,
+                "html" | "htm" => ExportFormat::HtmlHorizontal,
+                "xml" => ExportFormat::Xml,
+                "txt" => ExportFormat::Tabular,
+                _ => ExportFormat::Csv,
+            };
+            let msg = {
+                let mut st = self.state.lock().unwrap();
+                let entries: Vec<_> = st
+                    .selected_or_filtered_entries(&sel, !sel.is_empty())
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let res = st.export_table(&entries, &dest, fmt);
+                self.refresh_status_bar(&st);
+                res
+            };
+            let _ = self
+                .wnd
+                .hwnd()
+                .MessageBox(&msg, "Cache Table Export", co::MB::ICONINFORMATION);
+        }
+    }
+
+    fn trigger_export_urls(&self) {
+        let sel = self.selected_cache_row_indices();
+        if let Ok(Some(dest)) = pick_save_file(
+            self.wnd.hwnd(),
+            "Export Chrome Cache URLs",
+            "chrome_cache_urls.txt",
+            "txt",
+            &[("URLs Text File (*.txt)", "*.txt")],
+        ) {
+            let msg = {
+                let mut st = self.state.lock().unwrap();
+                let urls: Vec<String> = st
+                    .selected_or_filtered_entries(&sel, !sel.is_empty())
+                    .into_iter()
+                    .map(|e| e.url.clone())
+                    .collect();
+                match std::fs::write(&dest, urls.join("\n")) {
+                    Ok(()) => {
+                        let m = format!("Exported {} URL(s) to {}", urls.len(), dest.display());
+                        st.status_message = m.clone();
+                        self.refresh_status_bar(&st);
+                        m
+                    }
+                    Err(e) => {
+                        let m = format!("Write error: {e}");
+                        st.status_message = m.clone();
+                        self.refresh_status_bar(&st);
+                        m
+                    }
+                }
+            };
+            let _ = self
+                .wnd
+                .hwnd()
+                .MessageBox(&msg, "Export Cache URLs", co::MB::ICONINFORMATION);
+        }
+    }
+
     fn trigger_report(&self, fmt: ReportFormat) {
         if self.state.lock().unwrap().report.is_none() {
             let _ = self.wnd.hwnd().MessageBox(
@@ -2281,7 +2418,7 @@ impl Win32App {
         {
             let app = self.clone();
             self.btn_export.on().bn_clicked(move || {
-                app.trigger_export_cache(ExportFormat::Csv, "chrome_cache_export.csv", "csv", ("CSV", "*.csv"));
+                app.trigger_export_any();
                 Ok(())
             });
         }
@@ -2567,6 +2704,58 @@ impl Win32App {
             Box::new(|a| a.trigger_export_cache(ExportFormat::Csv, "chrome_cache_export.csv", "csv", ("CSV", "*.csv"))),
         );
         wire_menu(
+            IDM_EXPORT_TSV,
+            Box::new(|a| a.trigger_export_cache(ExportFormat::Tab, "chrome_cache_export.tsv", "tsv", ("TSV", "*.tsv"))),
+        );
+        wire_menu(
+            IDM_EXPORT_TABULAR,
+            Box::new(|a| {
+                a.trigger_export_cache(
+                    ExportFormat::Tabular,
+                    "chrome_cache_tabular.txt",
+                    "txt",
+                    ("Tabular Text", "*.txt"),
+                )
+            }),
+        );
+        wire_menu(
+            IDM_EXPORT_TEXT,
+            Box::new(|a| {
+                a.trigger_export_cache(
+                    ExportFormat::Text,
+                    "chrome_cache_records.txt",
+                    "txt",
+                    ("Plain Text", "*.txt"),
+                )
+            }),
+        );
+        wire_menu(
+            IDM_EXPORT_HTML_H,
+            Box::new(|a| {
+                a.trigger_export_cache(
+                    ExportFormat::HtmlHorizontal,
+                    "chrome_cache_table.html",
+                    "html",
+                    ("HTML Table", "*.html"),
+                )
+            }),
+        );
+        wire_menu(
+            IDM_EXPORT_HTML_V,
+            Box::new(|a| {
+                a.trigger_export_cache(
+                    ExportFormat::HtmlVertical,
+                    "chrome_cache_cards.html",
+                    "html",
+                    ("HTML Cards", "*.html"),
+                )
+            }),
+        );
+        wire_menu(
+            IDM_EXPORT_XML,
+            Box::new(|a| a.trigger_export_cache(ExportFormat::Xml, "chrome_cache_export.xml", "xml", ("XML", "*.xml"))),
+        );
+        wire_menu(
             IDM_EXPORT_JSON,
             Box::new(|a| {
                 a.trigger_export_cache(
@@ -2577,6 +2766,7 @@ impl Win32App {
                 )
             }),
         );
+        wire_menu(IDM_EXPORT_URLS, Box::new(|a| a.trigger_export_urls()));
         wire_menu(IDM_REPORT_HTML, Box::new(|a| a.trigger_report(ReportFormat::Html)));
         wire_menu(IDM_REPORT_JSON, Box::new(|a| a.trigger_report(ReportFormat::Json)));
         wire_menu(IDM_REPORT_MD, Box::new(|a| a.trigger_report(ReportFormat::Markdown)));
@@ -2672,6 +2862,37 @@ impl Win32App {
                 a.state.lock().unwrap().show_millis ^= true;
                 a.refresh_cache_list_and_preview();
                 a.refresh_timeline_tab();
+            }),
+        );
+        wire_menu(
+            IDM_TOGGLE_DETECTED_EXT,
+            Box::new(|a| {
+                let mut st = a.state.lock().unwrap();
+                st.extract_prefer_detected_ext = !st.extract_prefer_detected_ext;
+                let state_str = if st.extract_prefer_detected_ext { "ON" } else { "OFF" };
+                st.status_message = format!("Extraction prefer detected extension: {state_str}");
+                a.refresh_status_bar(&st);
+            }),
+        );
+        wire_menu(
+            IDM_TOGGLE_WEBSITE_DIRS,
+            Box::new(|a| {
+                let mut st = a.state.lock().unwrap();
+                st.extract_website_dirs = !st.extract_website_dirs;
+                let state_str = if st.extract_website_dirs { "ON" } else { "OFF" };
+                st.status_message = format!("Extraction website directory structure: {state_str}");
+                a.refresh_status_bar(&st);
+            }),
+        );
+        wire_menu(
+            IDM_TOGGLE_PEANUTS,
+            Box::new(|a| {
+                let mut st = a.state.lock().unwrap();
+                st.allow_peanuts = !st.allow_peanuts;
+                let state_str = if st.allow_peanuts { "ON" } else { "OFF" };
+                st.status_message =
+                    format!("Linux Chromium 'peanuts' key fallback: {state_str} (reload target to apply)");
+                a.refresh_status_bar(&st);
             }),
         );
         wire_menu(

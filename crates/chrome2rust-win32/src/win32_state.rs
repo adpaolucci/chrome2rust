@@ -136,6 +136,8 @@ pub struct Win32State {
     pub decrypt_enabled: bool,
     pub allow_peanuts: bool,
     pub keys_text: String,
+    pub extract_prefer_detected_ext: bool,
+    pub extract_website_dirs: bool,
 
     pub finding_sev_filter: Option<FindingSeverity>,
     pub findings_search: String,
@@ -191,6 +193,8 @@ impl Win32State {
             decrypt_enabled: initial.decrypt,
             allow_peanuts: true,
             keys_text: initial.keys.join("\n"),
+            extract_prefer_detected_ext: true,
+            extract_website_dirs: false,
 
             finding_sev_filter: None,
             findings_search: String::new(),
@@ -587,11 +591,11 @@ impl Win32State {
         let opts = ExtractOptions {
             output_dir: output_dir.to_path_buf(),
             filename_mode: ExtractFilenameMode::BasedOnUrl,
-            use_website_dir_structure: true,
+            use_website_dir_structure: self.extract_website_dirs,
             update_modified_time: true,
             new_name_if_exist: true,
             decompress: true,
-            prefer_detected_extension: false,
+            prefer_detected_extension: self.extract_prefer_detected_ext,
         };
         match extract_cache_entries(entries, &opts) {
             Ok(sum) => {
