@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod tools_cmd;
+
 use anyhow::{Context, Result, anyhow, bail};
 use chrome2rust_cache::export::{
     CacheColumn, ExportFormat, ExtractFilenameMode, ExtractOptions, extract_cache_entries, render_cache_export,
@@ -104,6 +106,39 @@ pub enum Commands {
 
     /// Run Model Context Protocol (MCP) server over standard I/O (JSON-RPC)
     Mcp(McpArgs),
+
+    /// Inspect Mozilla Firefox cache, history, cookies (metadata), bookmarks, downloads, formhistory, addons & sessions
+    Fx {
+        #[command(subcommand)]
+        action: tools_cmd::FxSubcommand,
+    },
+
+    /// Inspect Opera Blink & Presto caches and history
+    Opera {
+        #[command(subcommand)]
+        action: tools_cmd::OperaSubcommand,
+    },
+
+    /// Inspect Apple Safari cache, history & bookmarks
+    Safari {
+        #[command(subcommand)]
+        action: tools_cmd::SafariSubcommand,
+    },
+
+    /// Aggregate normalized history, downloads, add-ons, bookmarks & non-credential autofill across all browsers
+    Unified {
+        #[command(subcommand)]
+        action: tools_cmd::UnifiedSubcommand,
+    },
+
+    /// Extract search engine queries from history, cache URLs/Referer headers, and sessions (MyLastSearch equivalent)
+    SearchQueries(tools_cmd::SearchQueriesArgs),
+
+    /// Carve cached images (with EXIF/GPS) and video streams (MP4/WebM/TS/HLS/DASH) across browsers
+    Carve {
+        #[command(subcommand)]
+        action: tools_cmd::CarveSubcommand,
+    },
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -497,6 +532,12 @@ fn main() -> Result<()> {
         Commands::Pick(args) => cmd_pick(args),
         Commands::Gui(args) => cmd_gui(args, pick),
         Commands::Mcp(args) => cmd_mcp(args),
+        Commands::Fx { action } => tools_cmd::run_fx(action, audit_manifest.as_deref()),
+        Commands::Opera { action } => tools_cmd::run_opera(action, audit_manifest.as_deref()),
+        Commands::Safari { action } => tools_cmd::run_safari(action, audit_manifest.as_deref()),
+        Commands::Unified { action } => tools_cmd::run_unified(action, audit_manifest.as_deref()),
+        Commands::SearchQueries(args) => tools_cmd::run_search_queries(args, audit_manifest.as_deref()),
+        Commands::Carve { action } => tools_cmd::run_carve(action, audit_manifest.as_deref()),
     }
 }
 

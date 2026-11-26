@@ -232,7 +232,7 @@ fn collect_str_array(val: Option<&serde_json::Value>, out: &mut Vec<String>) {
     }
 }
 
-fn compute_extension_risks(
+pub fn compute_extension_risks(
     location: &str,
     from_webstore: bool,
     permissions: &[String],

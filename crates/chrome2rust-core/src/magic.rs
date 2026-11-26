@@ -1258,6 +1258,14 @@ pub fn detect_magic_bytes(b: &[u8]) -> Option<(&'static str, &'static str, &'sta
             DetectionSource::ContainerInspection,
         ));
     }
+    if len >= 389 && b[4] == 0x47 && b[196] == 0x47 && b[388] == 0x47 {
+        return Some((
+            "video/mp2t",
+            "m2ts",
+            "MPEG-2 Transport Stream (M2TS/BDAV)",
+            DetectionSource::ContainerInspection,
+        ));
+    }
 
     // PDF & PostScript
     if b.starts_with(b"%PDF-") {
@@ -2008,6 +2016,14 @@ pub fn detect_text_bytes(
     {
         return Some(("text/html", "html", "HTML Document", DetectionSource::TextHeuristic));
     }
+    if lower.starts_with("<mpd") || (lower.starts_with("<?xml") && lower.contains("<mpd")) {
+        return Some((
+            "application/dash+xml",
+            "mpd",
+            "MPEG-DASH MPD Manifest",
+            DetectionSource::TextHeuristic,
+        ));
+    }
     if lower.starts_with("<?xml") {
         if lower.contains("<html") {
             return Some((
@@ -2427,5 +2443,21 @@ mod tests {
         mz[0..2].copy_from_slice(b"MZ");
         mz[0x3c..0x40].copy_from_slice(&(u32::MAX - 8).to_le_bytes());
         assert!(detect_magic_bytes(&mz).is_none());
+    }
+
+    #[test]
+    fn test_dash_mpd_and_m2ts_detection() {
+        let mpd = br#"<?xml version="1.0"?><MPD mediaPresentationDuration="PT12S"></MPD>"#;
+        let det_mpd = detect_content(mpd, None, None, None);
+        assert_eq!(det_mpd.mime.as_deref(), Some("application/dash+xml"));
+        assert_eq!(det_mpd.extension.as_deref(), Some("mpd"));
+
+        let mut m2ts = vec![0u8; 576];
+        m2ts[4] = 0x47;
+        m2ts[196] = 0x47;
+        m2ts[388] = 0x47;
+        let det_m2ts = detect_content(&m2ts, None, None, None);
+        assert_eq!(det_m2ts.mime.as_deref(), Some("video/mp2t"));
+        assert_eq!(det_m2ts.extension.as_deref(), Some("m2ts"));
     }
 }

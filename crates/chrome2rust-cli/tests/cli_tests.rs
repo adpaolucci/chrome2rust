@@ -461,3 +461,170 @@ fn test_cli_sniff_and_extract_missing_or_mismatched_extensions() {
     assert!(out_forced.path().join("bad.example.org/icon.exe").is_file());
     assert!(!out_forced.path().join("bad.example.org/icon.png").exists());
 }
+
+#[test]
+fn test_cli_m2a_21_tools_help_exports_and_mcp_jsonrpc() {
+    // 1. Verify --help on all new command groups
+    for sub in ["fx", "opera", "safari", "unified", "search-queries", "carve"] {
+        let out = bin().args([sub, "--help"]).output().unwrap();
+        assert!(out.status.success(), "help failed for {sub}");
+    }
+
+    // 2. Verify mcp --tools exposes 29 tools and excludes chrome2rust_cache_delete
+    let mcp_tools = bin().args(["mcp", "--tools"]).output().unwrap();
+    assert!(mcp_tools.status.success());
+    let tools: serde_json::Value = serde_json::from_slice(&mcp_tools.stdout).unwrap();
+    let arr = tools.as_array().unwrap();
+    assert_eq!(arr.len(), 29);
+    assert!(!arr.iter().any(|t| t["name"] == "chrome2rust_cache_delete"));
+
+    // 3. Build synthetic multi-browser directory for CLI execution
+    let work = TempDir::new().unwrap();
+    let root = work.path();
+
+    let fx = root.join("FirefoxProfile");
+    std::fs::create_dir_all(&fx).unwrap();
+    let places = Connection::open(fx.join("places.sqlite")).unwrap();
+    places
+        .execute_batch(
+            "CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, frecency INTEGER, last_visit_date INTEGER);
+             CREATE TABLE moz_historyvisits(id INTEGER PRIMARY KEY, from_visit INTEGER, place_id INTEGER, visit_date INTEGER, visit_type INTEGER);
+             INSERT INTO moz_places VALUES (1, 'https://www.google.com/search?q=cli+test+query', 'Google', 1, 10, 1794700800000000);
+             INSERT INTO moz_historyvisits VALUES (1, 0, 1, 1794700800000000, 1);",
+        )
+        .unwrap();
+    let fxc = Connection::open(fx.join("cookies.sqlite")).unwrap();
+    fxc.execute_batch(
+        "CREATE TABLE moz_cookies(id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER, creationTime INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER);
+         INSERT INTO moz_cookies VALUES (1, 'prefs', 'SECRET_CLI_COOKIE', '.mozilla.org', '/', 1800000000, 1794700800000000, 1794700000000000, 1, 1, 1);",
+    )
+    .unwrap();
+
+    let ch = root.join("ChromeUserData").join("Default");
+    let ch_cache = ch.join("Cache").join("Cache_Data");
+    std::fs::create_dir_all(&ch_cache).unwrap();
+    let wd = Connection::open(ch.join("Web Data")).unwrap();
+    wd.execute_batch(
+        "CREATE TABLE autofill(name TEXT, value TEXT, value_lower TEXT, date_created INTEGER, date_last_used INTEGER, count INTEGER);
+         CREATE TABLE credit_cards(guid TEXT, name_on_card TEXT, expiration_month INTEGER, expiration_year INTEGER, card_number_encrypted BLOB, date_modified INTEGER, origin TEXT, use_count INTEGER, use_date INTEGER, billing_address_id TEXT, nickname TEXT);
+         INSERT INTO autofill VALUES ('city', 'Toronto', 'toronto', 1794700000, 1794700800, 5);
+         INSERT INTO credit_cards VALUES ('c1', 'SECRET_CLI_CARD', 1, 2030, X'01', 1794700800, '', 1, 1794700800, '', 'Card');",
+    )
+    .unwrap();
+    write_simple_entry(
+        &ch_cache.join("1111222233334444_0"),
+        "https://cdn.example.test/pic.png",
+        "HTTP/1.1 200 OK\0Content-Type: image/png\0\0",
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10\x00\x00\x00\x10\x08\x06\x00\x00\x00",
+        "93.184.216.34",
+        443,
+    );
+
+    // fx cookies JSON (must omit cookie value)
+    let fx_ck = bin()
+        .args(["fx", "cookies"])
+        .arg(&fx)
+        .args(["-f", "json"])
+        .output()
+        .unwrap();
+    assert!(fx_ck.status.success());
+    let fx_ck_txt = String::from_utf8_lossy(&fx_ck.stdout);
+    assert!(fx_ck_txt.contains(".mozilla.org"));
+    assert!(!fx_ck_txt.contains("SECRET_CLI_COOKIE"));
+
+    // unified autofill JSON (must omit credit_cards)
+    let af = bin()
+        .args(["unified", "autofill"])
+        .arg(root)
+        .args(["-f", "json"])
+        .output()
+        .unwrap();
+    assert!(af.status.success());
+    let af_txt = String::from_utf8_lossy(&af.stdout);
+    assert!(af_txt.contains("Toronto"));
+    assert!(!af_txt.contains("SECRET_CLI_CARD"));
+
+    // search-queries CSV export + custody manifest
+    let sq_csv = root.join("exports").join("queries.csv");
+    let sq_manifest = root.join("exports").join("queries_custody.json");
+    let sq = bin()
+        .args(["search-queries"])
+        .arg(root)
+        .args(["-f", "csv", "-o"])
+        .arg(&sq_csv)
+        .args(["--custody-manifest"])
+        .arg(&sq_manifest)
+        .output()
+        .unwrap();
+    assert!(sq.status.success(), "stderr: {}", String::from_utf8_lossy(&sq.stderr));
+    assert!(std::fs::read_to_string(&sq_csv).unwrap().contains("cli test query"));
+    assert!(sq_manifest.is_file());
+
+    // --format table + --custody-manifest (must still compute and write CustodyManifest)
+    let table_manifest = root.join("exports").join("table_custody.json");
+    let sq_table = bin()
+        .args(["search-queries"])
+        .arg(root)
+        .args(["--format", "table", "--custody-manifest"])
+        .arg(&table_manifest)
+        .output()
+        .unwrap();
+    assert!(
+        sq_table.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&sq_table.stderr)
+    );
+    assert!(table_manifest.is_file());
+    let tm_json: serde_json::Value = serde_json::from_slice(&std::fs::read(&table_manifest).unwrap()).unwrap();
+    assert_eq!(tm_json["tool_id"], "chrome2rust_search_queries");
+    assert_eq!(tm_json["merkle_root_sha256"].as_str().unwrap().len(), 64);
+
+    // carve images --extract-dir
+    let img_out = root.join("carved_imgs");
+    let ci = bin()
+        .args(["carve", "images"])
+        .arg(&ch_cache)
+        .args(["--extract-dir"])
+        .arg(&img_out)
+        .args(["-f", "json"])
+        .output()
+        .unwrap();
+    assert!(ci.status.success());
+    let ci_txt = String::from_utf8_lossy(&ci.stdout);
+    assert!(ci_txt.contains("pic.png"));
+    assert!(std::fs::read_dir(&img_out).unwrap().count() == 1);
+
+    // MCP stdio JSON-RPC initialize + tools/call
+    use std::io::Write;
+    let mut child = bin()
+        .arg("mcp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize"})
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":2,
+                "method":"tools/call",
+                "params":{"name":"chrome2rust_search_queries","arguments":{"path":root.to_string_lossy()}}
+            })
+        )
+        .unwrap();
+    }
+    let mcp_out = child.wait_with_output().unwrap();
+    assert!(mcp_out.status.success());
+    let mcp_stdout = String::from_utf8_lossy(&mcp_out.stdout);
+    assert!(mcp_stdout.contains("2024-11-05"));
+    assert!(mcp_stdout.contains("cli test query"));
+}

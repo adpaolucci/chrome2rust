@@ -652,6 +652,10 @@ pub enum ArtifactFormat {
     LevelDbStorageDirectory,
     ChromeJsonMetadata,
     CachedPayloadFile,
+    MozLz4File,
+    BinaryPlist,
+    FirefoxCache2Entry,
+    OperaPrestoCache,
     Unknown,
 }
 
@@ -670,6 +674,10 @@ impl ArtifactFormat {
             ArtifactFormat::LevelDbStorageDirectory => "LevelDB Storage Directory",
             ArtifactFormat::ChromeJsonMetadata => "Chrome JSON Metadata (Local State / Preferences / Bookmarks)",
             ArtifactFormat::CachedPayloadFile => "Cached Asset / Separate Payload File (f_xxxxxx or Extracted)",
+            ArtifactFormat::MozLz4File => "Mozilla mozLz40 Compressed JSON",
+            ArtifactFormat::BinaryPlist => "Apple Binary Property List (bplist00)",
+            ArtifactFormat::FirefoxCache2Entry => "Firefox cache2 Entry File",
+            ArtifactFormat::OperaPrestoCache => "Opera Presto Cache Index (dcache4.url)",
             ArtifactFormat::Unknown => "Unknown Artifact",
         }
     }
@@ -784,6 +792,38 @@ impl ArtifactSniffer {
                 }
                 if head.starts_with(b"SNSS") {
                     return make(ArtifactFormat::SnssSessionFile);
+                }
+                if head.starts_with(b"mozLz40\0") {
+                    let mut insp = make(ArtifactFormat::MozLz4File);
+                    insp.detected_mime = Some("application/x-mozlz4".to_string());
+                    insp.suggested_extension = Some("jsonlz4".to_string());
+                    insp.file_signature = Some("Mozilla mozLz40".to_string());
+                    insp.detection_source = crate::magic::DetectionSource::MagicSignature;
+                    return insp;
+                }
+                if head.starts_with(b"bplist00") {
+                    let mut insp = make(ArtifactFormat::BinaryPlist);
+                    insp.detected_mime = Some("application/x-bplist".to_string());
+                    insp.suggested_extension = Some("plist".to_string());
+                    insp.file_signature = Some("Apple Binary Plist (bplist00)".to_string());
+                    insp.detection_source = crate::magic::DetectionSource::MagicSignature;
+                    return insp;
+                }
+                let fname_lower = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_default();
+                if fname_lower == "dcache4.url" {
+                    return make(ArtifactFormat::OperaPrestoCache);
+                }
+                if fname_lower.len() == 40
+                    && fname_lower.bytes().all(|b| b.is_ascii_hexdigit())
+                    && path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("entries"))
+                {
+                    return make(ArtifactFormat::FirefoxCache2Entry);
                 }
                 if n >= 8 && u64::from_le_bytes(head[0..8].try_into().unwrap_or([0; 8])) == 0xfcfb_6d1b_a772_5c30 {
                     let fname = path
@@ -1002,5 +1042,741 @@ mod tests {
         assert_eq!(resolved.user_data_dir, Some(nested_ud));
         assert_eq!(resolved.profile_dirs, vec![profile.clone()]);
         assert_eq!(resolved.cache_dirs, vec![profile.join("Cache").join("Cache_Data")]);
+    }
+}
+
+// =========================================================================
+// Unified Multi-Browser Discovery (Chromium, Firefox, Opera, Safari)
+// =========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UnifiedBrowserKind {
+    Chrome,
+    ChromeBeta,
+    ChromeDev,
+    ChromeCanary,
+    Chromium,
+    Edge,
+    Brave,
+    Vivaldi,
+    Yandex,
+    Opera,
+    OperaGx,
+    OperaPresto,
+    Firefox,
+    Safari,
+    Custom,
+}
+
+impl UnifiedBrowserKind {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Chrome => "Google Chrome",
+            Self::ChromeBeta => "Google Chrome Beta",
+            Self::ChromeDev => "Google Chrome Dev",
+            Self::ChromeCanary => "Google Chrome Canary",
+            Self::Chromium => "Chromium",
+            Self::Edge => "Microsoft Edge",
+            Self::Brave => "Brave",
+            Self::Vivaldi => "Vivaldi",
+            Self::Yandex => "Yandex Browser",
+            Self::Opera => "Opera",
+            Self::OperaGx => "Opera GX",
+            Self::OperaPresto => "Opera Classic (Presto)",
+            Self::Firefox => "Mozilla Firefox",
+            Self::Safari => "Apple Safari",
+            Self::Custom => "Custom Browser",
+        }
+    }
+
+    pub fn as_slug(&self) -> &'static str {
+        match self {
+            Self::Chrome => "chrome",
+            Self::ChromeBeta => "chrome-beta",
+            Self::ChromeDev => "chrome-dev",
+            Self::ChromeCanary => "chrome-canary",
+            Self::Chromium => "chromium",
+            Self::Edge => "edge",
+            Self::Brave => "brave",
+            Self::Vivaldi => "vivaldi",
+            Self::Yandex => "yandex",
+            Self::Opera => "opera",
+            Self::OperaGx => "opera-gx",
+            Self::OperaPresto => "opera-presto",
+            Self::Firefox => "firefox",
+            Self::Safari => "safari",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn from_filter(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
+            "chrome" | "googlechrome" => Some(Self::Chrome),
+            "chromebeta" => Some(Self::ChromeBeta),
+            "chromedev" => Some(Self::ChromeDev),
+            "chromecanary" => Some(Self::ChromeCanary),
+            "chromium" => Some(Self::Chromium),
+            "edge" | "microsoftedge" => Some(Self::Edge),
+            "brave" => Some(Self::Brave),
+            "vivaldi" => Some(Self::Vivaldi),
+            "yandex" => Some(Self::Yandex),
+            "opera" | "operastable" => Some(Self::Opera),
+            "operagx" => Some(Self::OperaGx),
+            "operapresto" | "operaclassic" | "presto" => Some(Self::OperaPresto),
+            "firefox" | "fx" | "mozilla" | "mozillafirefox" => Some(Self::Firefox),
+            "safari" | "applesafari" => Some(Self::Safari),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
+    pub fn from_chromium(kind: BrowserKind) -> Self {
+        match kind {
+            BrowserKind::Chrome => Self::Chrome,
+            BrowserKind::ChromeBeta => Self::ChromeBeta,
+            BrowserKind::ChromeDev => Self::ChromeDev,
+            BrowserKind::ChromeCanary => Self::ChromeCanary,
+            BrowserKind::Chromium => Self::Chromium,
+            BrowserKind::Edge => Self::Edge,
+            BrowserKind::Brave => Self::Brave,
+            BrowserKind::Opera => Self::Opera,
+            BrowserKind::Vivaldi => Self::Vivaldi,
+            BrowserKind::Yandex => Self::Yandex,
+            BrowserKind::Custom => Self::Custom,
+        }
+    }
+
+    pub fn matches_filter(&self, filter: Self) -> bool {
+        if *self == filter {
+            return true;
+        }
+        match filter {
+            Self::Opera => matches!(self, Self::Opera | Self::OperaGx | Self::OperaPresto),
+            Self::Chrome => matches!(
+                self,
+                Self::Chrome | Self::ChromeBeta | Self::ChromeDev | Self::ChromeCanary
+            ),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedProfileTarget {
+    pub browser: UnifiedBrowserKind,
+    pub browser_name: String,
+    pub profile_name: String,
+    pub profile_dir: PathBuf,
+    pub cache_dirs: Vec<PathBuf>,
+}
+
+/// Discovers local Mozilla Firefox profiles across Windows, Linux, and macOS.
+pub fn discover_firefox_profiles() -> Vec<UnifiedProfileTarget> {
+    let mut roots: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(roam) = dirs::data_dir() {
+            let cache_root = dirs::data_local_dir().map(|l| l.join("Mozilla\\Firefox"));
+            roots.push((roam.join("Mozilla\\Firefox"), cache_root));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let cache_root = dirs::cache_dir().map(|c| c.join("mozilla/firefox"));
+            roots.push((home.join(".mozilla/firefox"), cache_root));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_sup) = dirs::data_dir() {
+            let cache_root = dirs::cache_dir().map(|c| c.join("Firefox"));
+            roots.push((app_sup.join("Firefox"), cache_root));
+        }
+    }
+
+    let mut out = Vec::new();
+    for (root, cache_root) in roots {
+        if root.is_dir() {
+            out.extend(discover_firefox_profiles_in_root(&root, cache_root.as_deref()));
+        }
+    }
+    out
+}
+
+pub fn discover_firefox_profiles_in_root(root: &Path, cache_root: Option<&Path>) -> Vec<UnifiedProfileTarget> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Parse profiles.ini if present
+    let ini_path = root.join("profiles.ini");
+    if let Ok(text) = std::fs::read_to_string(&ini_path) {
+        let mut cur_name: Option<String> = None;
+        let mut cur_path: Option<String> = None;
+        let mut is_relative = true;
+        let flush = |name: &mut Option<String>,
+                     path: &mut Option<String>,
+                     rel: bool,
+                     out: &mut Vec<UnifiedProfileTarget>,
+                     seen: &mut std::collections::HashSet<PathBuf>| {
+            if let Some(p_str) = path.take() {
+                let pdir = if rel { root.join(&p_str) } else { PathBuf::from(&p_str) };
+                if pdir.is_dir() && seen.insert(pdir.clone()) {
+                    let pname = name
+                        .take()
+                        .or_else(|| pdir.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .unwrap_or_else(|| "default".to_string());
+                    let mut cache_dirs = find_firefox_cache_dirs(&pdir);
+                    if let Some(cr) = cache_root {
+                        let rel_name = pdir
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        for cand in [
+                            cr.join(&p_str).join("cache2").join("entries"),
+                            cr.join(&p_str).join("cache2"),
+                            cr.join("Profiles").join(&rel_name).join("cache2").join("entries"),
+                            cr.join(&rel_name).join("cache2").join("entries"),
+                        ] {
+                            if cand.is_dir() && !cache_dirs.contains(&cand) {
+                                cache_dirs.push(cand);
+                            }
+                        }
+                    }
+                    out.push(UnifiedProfileTarget {
+                        browser: UnifiedBrowserKind::Firefox,
+                        browser_name: UnifiedBrowserKind::Firefox.display_name().to_string(),
+                        profile_name: pname,
+                        profile_dir: pdir,
+                        cache_dirs,
+                    });
+                }
+            }
+            *name = None;
+        };
+
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') && t.ends_with(']') {
+                flush(&mut cur_name, &mut cur_path, is_relative, &mut out, &mut seen);
+                is_relative = true;
+            } else if let Some((k, v)) = t.split_once('=') {
+                match k.trim() {
+                    "Name" => cur_name = Some(v.trim().to_string()),
+                    "Path" => cur_path = Some(v.trim().to_string()),
+                    "IsRelative" => is_relative = v.trim() != "0",
+                    _ => {}
+                }
+            }
+        }
+        flush(&mut cur_name, &mut cur_path, is_relative, &mut out, &mut seen);
+    }
+
+    // 2. Also scan Profiles/ and direct subdirectories
+    for container in [root.join("Profiles"), root.to_path_buf()] {
+        if let Ok(rd) = std::fs::read_dir(&container) {
+            for e in rd.flatten() {
+                let pdir = e.path();
+                if pdir.is_dir() && is_firefox_profile_dir(&pdir) && seen.insert(pdir.clone()) {
+                    let pname = pdir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "default".to_string());
+                    let mut cache_dirs = find_firefox_cache_dirs(&pdir);
+                    if let Some(cr) = cache_root {
+                        for cand in [
+                            cr.join("Profiles").join(&pname).join("cache2").join("entries"),
+                            cr.join(&pname).join("cache2").join("entries"),
+                        ] {
+                            if cand.is_dir() && !cache_dirs.contains(&cand) {
+                                cache_dirs.push(cand);
+                            }
+                        }
+                    }
+                    out.push(UnifiedProfileTarget {
+                        browser: UnifiedBrowserKind::Firefox,
+                        browser_name: UnifiedBrowserKind::Firefox.display_name().to_string(),
+                        profile_name: pname,
+                        profile_dir: pdir,
+                        cache_dirs,
+                    });
+                }
+            }
+        }
+    }
+
+    out
+}
+
+pub fn is_firefox_profile_dir(dir: &Path) -> bool {
+    const FX_FILES: &[&str] = &[
+        "places.sqlite",
+        "cookies.sqlite",
+        "formhistory.sqlite",
+        "extensions.json",
+        "addons.json",
+        "sessionstore.jsonlz4",
+        "sessionstore.js",
+    ];
+    FX_FILES.iter().any(|f| dir.join(f).is_file())
+        || dir.join("bookmarkbackups").is_dir()
+        || dir.join("sessionstore-backups").is_dir()
+        || dir.join("cache2").is_dir()
+}
+
+pub fn find_firefox_cache_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for cand in [dir.join("cache2").join("entries"), dir.join("entries")] {
+        if cand.is_dir() && is_firefox_cache_dir(&cand) && !out.contains(&cand) {
+            out.push(cand);
+        }
+    }
+    if out.is_empty() && is_firefox_cache_dir(dir) {
+        out.push(dir.to_path_buf());
+    }
+    out
+}
+
+pub fn is_firefox_cache_dir(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    if dir.join("entries").is_dir() {
+        return true;
+    }
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten().take(128) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.len() == 40 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Discovers local Opera Blink (Stable, GX) and legacy Opera Presto profiles.
+pub fn discover_opera_profiles() -> Vec<UnifiedProfileTarget> {
+    let mut out = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let (Some(roam), Some(local)) = (dirs::data_dir(), dirs::data_local_dir()) {
+            let blink_specs = [
+                (
+                    UnifiedBrowserKind::Opera,
+                    roam.join("Opera Software\\Opera Stable"),
+                    local.join("Opera Software\\Opera Stable"),
+                ),
+                (
+                    UnifiedBrowserKind::OperaGx,
+                    roam.join("Opera Software\\Opera GX Stable"),
+                    local.join("Opera Software\\Opera GX Stable"),
+                ),
+            ];
+            for (kind, prof, cache_root) in blink_specs {
+                if prof.is_dir() || cache_root.is_dir() {
+                    let mut cache_dirs = find_cache_dirs_in_profile(&prof);
+                    for c in find_cache_dirs_in_profile(&cache_root) {
+                        if !cache_dirs.contains(&c) {
+                            cache_dirs.push(c);
+                        }
+                    }
+                    out.push(UnifiedProfileTarget {
+                        browser: kind,
+                        browser_name: kind.display_name().to_string(),
+                        profile_name: "Default".to_string(),
+                        profile_dir: prof,
+                        cache_dirs,
+                    });
+                }
+            }
+            let presto_prof = roam.join("Opera\\Opera");
+            let presto_cache = local.join("Opera\\Opera\\cache");
+            if presto_prof.is_dir() || presto_cache.is_dir() {
+                let mut caches = Vec::new();
+                if presto_cache.is_dir() {
+                    caches.push(presto_cache);
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: UnifiedBrowserKind::OperaPresto,
+                    browser_name: UnifiedBrowserKind::OperaPresto.display_name().to_string(),
+                    profile_name: "Opera Presto".to_string(),
+                    profile_dir: presto_prof,
+                    cache_dirs: caches,
+                });
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(cfg) = dirs::config_dir() {
+            let prof = cfg.join("opera");
+            let cache_root = dirs::cache_dir().map(|c| c.join("opera"));
+            if prof.is_dir() {
+                let mut caches = find_cache_dirs_in_profile(&prof);
+                if let Some(cr) = cache_root {
+                    for c in find_cache_dirs_in_profile(&cr) {
+                        if !caches.contains(&c) {
+                            caches.push(c);
+                        }
+                    }
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: UnifiedBrowserKind::Opera,
+                    browser_name: UnifiedBrowserKind::Opera.display_name().to_string(),
+                    profile_name: "Default".to_string(),
+                    profile_dir: prof,
+                    cache_dirs: caches,
+                });
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_sup) = dirs::data_dir() {
+            let prof = app_sup.join("com.operasoftware.Opera");
+            let cache_root = dirs::cache_dir().map(|c| c.join("com.operasoftware.Opera"));
+            if prof.is_dir() {
+                let mut caches = find_cache_dirs_in_profile(&prof);
+                if let Some(cr) = cache_root {
+                    for c in find_cache_dirs_in_profile(&cr) {
+                        if !caches.contains(&c) {
+                            caches.push(c);
+                        }
+                    }
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: UnifiedBrowserKind::Opera,
+                    browser_name: UnifiedBrowserKind::Opera.display_name().to_string(),
+                    profile_name: "Default".to_string(),
+                    profile_dir: prof,
+                    cache_dirs: caches,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// Discovers local Apple Safari data directories (macOS and legacy Windows).
+pub fn discover_safari_profiles() -> Vec<UnifiedProfileTarget> {
+    let mut out = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let prof = home.join("Library/Safari");
+            let cache = home.join("Library/Caches/com.apple.Safari");
+            if prof.is_dir() || cache.is_dir() {
+                let mut caches = Vec::new();
+                if cache.is_dir() {
+                    caches.push(cache);
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: UnifiedBrowserKind::Safari,
+                    browser_name: UnifiedBrowserKind::Safari.display_name().to_string(),
+                    profile_name: "Safari".to_string(),
+                    profile_dir: prof,
+                    cache_dirs: caches,
+                });
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let (Some(roam), Some(local)) = (dirs::data_dir(), dirs::data_local_dir()) {
+            let prof = roam.join("Apple Computer\\Safari");
+            let cache = local.join("Apple Computer\\Safari");
+            if prof.is_dir() || cache.is_dir() {
+                let mut caches = Vec::new();
+                if cache.is_dir() {
+                    caches.push(cache);
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: UnifiedBrowserKind::Safari,
+                    browser_name: UnifiedBrowserKind::Safari.display_name().to_string(),
+                    profile_name: "Safari".to_string(),
+                    profile_dir: prof,
+                    cache_dirs: caches,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+pub fn is_safari_dir(dir: &Path) -> bool {
+    dir.join("History.db").is_file()
+        || dir.join("History.plist").is_file()
+        || dir.join("Bookmarks.plist").is_file()
+        || dir.join("Cache.db").is_file()
+        || dir.join("fsCachedData").is_dir()
+}
+
+pub fn is_opera_presto_dir(dir: &Path) -> bool {
+    dir.join("dcache4.url").is_file()
+        || dir.join("cache").join("dcache4.url").is_file()
+        || dir.join("global_history.dat").is_file()
+        || dir.join("opera6.adr").is_file()
+        || dir.join("bookmarks.adr").is_file()
+}
+
+/// Discovers all installed browser profiles across Chromium, Firefox, Opera, and Safari.
+pub fn discover_all_browser_profiles() -> Vec<UnifiedProfileTarget> {
+    let mut out = Vec::new();
+    let mut seen_profiles = std::collections::HashSet::new();
+
+    for b in discover_local_browsers() {
+        let ukind = UnifiedBrowserKind::from_chromium(b.browser);
+        if b.profiles.is_empty() && b.user_data_dir.is_dir() {
+            if seen_profiles.insert(b.user_data_dir.clone()) {
+                let mut caches = find_cache_dirs_in_profile(&b.user_data_dir);
+                if let Some(cr) = &b.cache_root_dir {
+                    for c in find_cache_dirs_in_profile(cr) {
+                        if !caches.contains(&c) {
+                            caches.push(c);
+                        }
+                    }
+                }
+                out.push(UnifiedProfileTarget {
+                    browser: ukind,
+                    browser_name: b.name.clone(),
+                    profile_name: "Default".to_string(),
+                    profile_dir: b.user_data_dir,
+                    cache_dirs: caches,
+                });
+            }
+        } else {
+            for p in b.profiles {
+                if seen_profiles.insert(p.path.clone()) {
+                    out.push(UnifiedProfileTarget {
+                        browser: ukind,
+                        browser_name: b.name.clone(),
+                        profile_name: p.display_name.unwrap_or(p.dir_name),
+                        profile_dir: p.path,
+                        cache_dirs: p.cache_dirs,
+                    });
+                }
+            }
+        }
+    }
+
+    for p in discover_firefox_profiles()
+        .into_iter()
+        .chain(discover_opera_profiles())
+        .chain(discover_safari_profiles())
+    {
+        if seen_profiles.insert(p.profile_dir.clone()) {
+            out.push(p);
+        }
+    }
+
+    out
+}
+
+/// Resolves arbitrary user-supplied target paths into normalized multi-browser targets
+/// (supporting direct Chromium, Firefox, Opera Blink/Presto, Safari, cache dirs, or multi-browser containers).
+pub fn resolve_unified_targets(paths: &[PathBuf]) -> Vec<UnifiedProfileTarget> {
+    if paths.is_empty() {
+        return discover_all_browser_profiles();
+    }
+
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for root in paths {
+        collect_unified_targets_from_path(root, 0, &mut out, &mut seen);
+    }
+
+    out
+}
+
+fn infer_browser_from_path(path: &Path, default_kind: UnifiedBrowserKind) -> UnifiedBrowserKind {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    if lower.contains("opera gx") {
+        UnifiedBrowserKind::OperaGx
+    } else if lower.contains("opera") && is_opera_presto_dir(path) {
+        UnifiedBrowserKind::OperaPresto
+    } else if lower.contains("opera") {
+        UnifiedBrowserKind::Opera
+    } else if lower.contains("edge") {
+        UnifiedBrowserKind::Edge
+    } else if lower.contains("brave") {
+        UnifiedBrowserKind::Brave
+    } else if lower.contains("vivaldi") {
+        UnifiedBrowserKind::Vivaldi
+    } else if lower.contains("yandex") {
+        UnifiedBrowserKind::Yandex
+    } else if lower.contains("firefox") {
+        UnifiedBrowserKind::Firefox
+    } else if lower.contains("safari") {
+        UnifiedBrowserKind::Safari
+    } else {
+        default_kind
+    }
+}
+
+fn collect_unified_targets_from_path(
+    path: &Path,
+    depth: usize,
+    out: &mut Vec<UnifiedProfileTarget>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) {
+    if !path.exists() {
+        return;
+    }
+
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            collect_unified_targets_from_path(parent, depth + 1, out, seen);
+        }
+        return;
+    }
+
+    let pname = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Target".to_string());
+
+    // 1. Firefox root (profiles.ini or Profiles/) or direct Firefox profile
+    if path.join("profiles.ini").is_file() || path.join("Profiles").is_dir() {
+        for p in discover_firefox_profiles_in_root(path, None) {
+            if seen.insert(p.profile_dir.clone()) {
+                out.push(p);
+            }
+        }
+        return;
+    }
+    if is_firefox_profile_dir(path) || is_firefox_cache_dir(path) {
+        if seen.insert(path.to_path_buf()) {
+            out.push(UnifiedProfileTarget {
+                browser: UnifiedBrowserKind::Firefox,
+                browser_name: UnifiedBrowserKind::Firefox.display_name().to_string(),
+                profile_name: pname,
+                profile_dir: path.to_path_buf(),
+                cache_dirs: find_firefox_cache_dirs(path),
+            });
+        }
+        return;
+    }
+
+    // 2. Safari directory
+    if is_safari_dir(path) {
+        if seen.insert(path.to_path_buf()) {
+            out.push(UnifiedProfileTarget {
+                browser: UnifiedBrowserKind::Safari,
+                browser_name: UnifiedBrowserKind::Safari.display_name().to_string(),
+                profile_name: pname,
+                profile_dir: path.to_path_buf(),
+                cache_dirs: vec![path.to_path_buf()],
+            });
+        }
+        return;
+    }
+
+    // 3. Opera Presto directory
+    if is_opera_presto_dir(path) {
+        if seen.insert(path.to_path_buf()) {
+            let mut caches = Vec::new();
+            if path.join("cache").join("dcache4.url").is_file() {
+                caches.push(path.join("cache"));
+            } else if path.join("dcache4.url").is_file() {
+                caches.push(path.to_path_buf());
+            }
+            out.push(UnifiedProfileTarget {
+                browser: UnifiedBrowserKind::OperaPresto,
+                browser_name: UnifiedBrowserKind::OperaPresto.display_name().to_string(),
+                profile_name: pname,
+                profile_dir: path.to_path_buf(),
+                cache_dirs: caches,
+            });
+        }
+        return;
+    }
+
+    // 4. Chromium User Data, Profile, or Cache directory
+    let looks_chromium_ud = path.join("Local State").is_file() || path.join("Default").is_dir();
+    let looks_chromium_prof = has_profile_artifacts(path);
+    let looks_chromium_cache = is_cache_data_dir(path) || is_cache_data_dir(&path.join("Cache_Data"));
+    if looks_chromium_ud || looks_chromium_prof || looks_chromium_cache {
+        let resolved = resolve_target_path(path);
+        if !resolved.profile_dirs.is_empty() {
+            for pdir in resolved.profile_dirs {
+                if seen.insert(pdir.clone()) {
+                    let bkind = infer_browser_from_path(&pdir, UnifiedBrowserKind::Chrome);
+                    let prof_label = pdir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Default".to_string());
+                    out.push(UnifiedProfileTarget {
+                        browser: bkind,
+                        browser_name: bkind.display_name().to_string(),
+                        profile_name: prof_label,
+                        cache_dirs: find_cache_dirs_in_profile(&pdir),
+                        profile_dir: pdir,
+                    });
+                }
+            }
+            return;
+        }
+        if !resolved.cache_dirs.is_empty() && seen.insert(path.to_path_buf()) {
+            let bkind = infer_browser_from_path(path, UnifiedBrowserKind::Chrome);
+            out.push(UnifiedProfileTarget {
+                browser: bkind,
+                browser_name: bkind.display_name().to_string(),
+                profile_name: pname,
+                profile_dir: path.to_path_buf(),
+                cache_dirs: resolved.cache_dirs,
+            });
+            return;
+        }
+    }
+
+    // 5. Multi-browser container directory: recurse into child directories (bounded depth 3)
+    if depth < 3
+        && let Ok(rd) = std::fs::read_dir(path)
+    {
+        for entry in rd.flatten() {
+            let child = entry.path();
+            if child.is_dir() {
+                collect_unified_targets_from_path(&child, depth + 1, out, seen);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod unified_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_resolve_unified_targets_multi_browser_container() {
+        let root = TempDir::new().unwrap();
+        let ch = root.path().join("ChromeUserData").join("Default");
+        std::fs::create_dir_all(&ch).unwrap();
+        std::fs::write(ch.join("History"), b"SQLite format 3\0").unwrap();
+
+        let fx = root.path().join("FirefoxProfile");
+        std::fs::create_dir_all(fx.join("cache2").join("entries")).unwrap();
+        std::fs::write(fx.join("places.sqlite"), b"SQLite format 3\0").unwrap();
+
+        let sf = root.path().join("SafariData");
+        std::fs::create_dir_all(&sf).unwrap();
+        std::fs::write(sf.join("Bookmarks.plist"), b"bplist00").unwrap();
+
+        let op = root.path().join("OperaPresto");
+        std::fs::create_dir_all(&op).unwrap();
+        std::fs::write(op.join("global_history.dat"), b"").unwrap();
+
+        let targets = resolve_unified_targets(&[root.path().to_path_buf()]);
+        assert!(targets.iter().any(|t| t.browser == UnifiedBrowserKind::Chrome));
+        assert!(targets.iter().any(|t| t.browser == UnifiedBrowserKind::Firefox));
+        assert!(targets.iter().any(|t| t.browser == UnifiedBrowserKind::Safari));
+        assert!(targets.iter().any(|t| t.browser == UnifiedBrowserKind::OperaPresto));
     }
 }

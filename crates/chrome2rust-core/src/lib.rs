@@ -5,6 +5,8 @@ pub mod discovery;
 pub mod error;
 pub mod logging;
 pub mod magic;
+pub mod mozlz4;
+pub mod plist;
 pub mod sqlite_util;
 pub mod time;
 

@@ -3,6 +3,7 @@
 pub mod html;
 pub mod json;
 pub mod markdown;
+pub mod table_export;
 
 use chrome2rust_core::error::ChromeError;
 use chrome2rust_forensics::UserDataReport;

@@ -13,9 +13,11 @@ use chrome2rust_core::crypto::CryptoOptions;
 use chrome2rust_core::discovery::{DiscoveredBrowser, discover_local_browsers};
 use chrome2rust_forensics::custody::{CustodyManifest, generate_custody_manifest, write_custody_manifest};
 use chrome2rust_forensics::findings::FindingSeverity;
+use chrome2rust_forensics::providers::build_browser_tool_providers;
 use chrome2rust_forensics::{AnalysisOptions, ProfileAnalysis, UserDataReport, analyze_user_data};
 use chrome2rust_report::markdown::format_bytes;
 use chrome2rust_report::{ReportFormat, write_report};
+use guap_gui_iced::IcedDataGrid;
 use iced::widget::{button, column, container, mouse_area, row, rule, space, text, text_input};
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 use std::collections::HashSet;
@@ -113,6 +115,10 @@ pub struct App {
     pub load_generation: u64,
     pub is_loading: bool,
     pub status_message: String,
+
+    // 21-tool Multi-Browser & Carvers grid
+    pub browser_grid: IcedDataGrid,
+    pub browser_grid_loaded: bool,
 }
 
 impl App {
@@ -189,6 +195,8 @@ impl App {
             status_message:
                 "Ready — click Open... to select a target folder, or choose a discovered browser in the Console Tree."
                     .into(),
+            browser_grid: IcedDataGrid::new(Vec::new()).with_dark_mode(false),
+            browser_grid_loaded: false,
         };
 
         if let Some(p) = initial_path {
@@ -332,6 +340,7 @@ impl App {
                     self.selected_profile_idx = None;
                     self.custody_dlg.manifest = None;
                     self.custody_dlg.status = None;
+                    self.browser_grid_loaded = false;
                     self.rebuild_cache_view();
                 }
             }
@@ -668,7 +677,20 @@ impl App {
                 self.selected_rows.clear();
                 self.rebuild_cache_view();
             }
-            Message::SelectTab(tab) => self.active_tab = tab,
+            Message::SelectTab(tab) => {
+                self.active_tab = tab;
+                if tab == WorkspaceTab::BrowserTools && !self.browser_grid_loaded {
+                    let trimmed = self.path_input.trim();
+                    let target = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(trimmed))
+                    };
+                    self.browser_grid = IcedDataGrid::new(build_browser_tool_providers(target.as_deref()))
+                        .with_dark_mode(self.dark_mode);
+                    self.browser_grid_loaded = true;
+                }
+            }
             Message::ToggleConsoleTree => self.show_console_tree = !self.show_console_tree,
             Message::TogglePreviewPane => {
                 self.show_preview_pane = !self.show_preview_pane;
@@ -890,6 +912,9 @@ impl App {
                     }
                 }
             }
+            Message::BrowserToolsGrid(grid_msg) => {
+                return self.browser_grid.update(grid_msg).map(Message::BrowserToolsGrid);
+            }
         }
         Task::none()
     }
@@ -906,6 +931,7 @@ impl App {
             WorkspaceTab::CredsCookies => views::forensic_tabs::view_creds_tab(self),
             WorkspaceTab::ExtensionsBookmarks => views::forensic_tabs::view_extensions_tab(self),
             WorkspaceTab::SessionsStorage => views::forensic_tabs::view_sessions_tab(self),
+            WorkspaceTab::BrowserTools => self.browser_grid.view().map(Message::BrowserToolsGrid),
         };
 
         let mut body = row![].spacing(8).height(Length::Fill);

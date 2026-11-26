@@ -5,6 +5,49 @@ use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone, Utc};
 pub const CHROME_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
 pub const CHROME_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
 
+/// Seconds between Unix epoch (1970-01-01T00:00:00Z) and Apple Cocoa/CoreFoundation epoch (2001-01-01T00:00:00Z).
+pub const CF_ABSOLUTE_EPOCH_OFFSET_SECS: f64 = 978_307_200.0;
+
+/// Converts Mozilla PRTime (microseconds since 1970-01-01 UTC) into `DateTime<Utc>`.
+pub fn prtime_us_to_datetime(us: i64) -> Option<DateTime<Utc>> {
+    if !(31_536_000_000_000..=7_258_118_400_000_000).contains(&us) {
+        return None;
+    }
+    DateTime::from_timestamp_micros(us)
+}
+
+/// Converts Unix seconds since 1970-01-01 UTC into `DateTime<Utc>`, rejecting sentinel/invalid dates.
+pub fn unix_secs_to_datetime(secs: i64) -> Option<DateTime<Utc>> {
+    if !(31_536_000..=7_258_118_400).contains(&secs) {
+        return None;
+    }
+    DateTime::from_timestamp(secs, 0)
+}
+
+/// Converts Unix milliseconds since 1970-01-01 UTC into `DateTime<Utc>`, rejecting sentinel/invalid dates.
+pub fn unix_ms_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
+    if !(31_536_000_000..=7_258_118_400_000).contains(&ms) {
+        return None;
+    }
+    DateTime::from_timestamp_millis(ms)
+}
+
+/// Converts Apple CFAbsoluteTime / Cocoa Core Data seconds since 2001-01-01 UTC into `DateTime<Utc>`.
+/// Also normalizes nanosecond-scaled values (`> 1e13`) occasionally seen in Safari `History.db`.
+pub fn cf_absolute_time_to_datetime(val: f64) -> Option<DateTime<Utc>> {
+    if !val.is_finite() || val == 0.0 {
+        return None;
+    }
+    let secs = if val.abs() > 1e13 { val / 1e9 } else { val };
+    let unix = secs + CF_ABSOLUTE_EPOCH_OFFSET_SECS;
+    if !(31_536_000.0..=7_258_118_400.0).contains(&unix) {
+        return None;
+    }
+    let whole = unix.trunc() as i64;
+    let nanos = ((unix.fract().abs()) * 1_000_000_000.0).round() as u32;
+    DateTime::from_timestamp(whole, nanos.min(999_999_999))
+}
+
 /// Converts Chrome/WebKit microsecond timestamp (microseconds since 1601-01-01 UTC)
 /// into `DateTime<Utc>`. Returns `None` for zero, negative, or out-of-range sentinel values
 /// (e.g., 1601-01-01 or 9999-12-31 placeholders).
@@ -207,5 +250,28 @@ mod tests {
         assert_eq!(parse_relative_duration("7d").unwrap(), Duration::days(7));
         assert!(parse_relative_duration("99999999999999d").is_err());
         assert!(parse_relative_duration("9223372036854775807s").is_err());
+    }
+
+    #[test]
+    fn test_firefox_and_safari_epochs() {
+        // 2026-11-15T00:00:00Z = 1_794_700_800 Unix secs
+        let pr = prtime_us_to_datetime(1_794_700_800_000_000).expect("valid prtime");
+        assert_eq!(pr.year(), 2026);
+        assert_eq!(pr.month(), 11);
+        assert_eq!(pr.day(), 15);
+        assert!(prtime_us_to_datetime(0).is_none());
+
+        let us = unix_secs_to_datetime(1_794_700_800).expect("valid unix secs");
+        assert_eq!(us.year(), 2026);
+        let um = unix_ms_to_datetime(1_794_700_800_123).expect("valid unix ms");
+        assert_eq!(um.year(), 2026);
+
+        let cf_secs = 1_794_700_800.0 - CF_ABSOLUTE_EPOCH_OFFSET_SECS;
+        let cf = cf_absolute_time_to_datetime(cf_secs).expect("valid cf_absolute_time");
+        assert_eq!(cf.year(), 2026);
+        assert_eq!(cf.month(), 11);
+        assert_eq!(cf.day(), 15);
+        assert!(cf_absolute_time_to_datetime(0.0).is_none());
+        assert!(cf_absolute_time_to_datetime(f64::NAN).is_none());
     }
 }

@@ -75,8 +75,55 @@ fn webdata_ts(val: i64) -> Option<DateTime<Utc>> {
     }
 }
 
+/// Extracts ONLY non-credential form autofill entries (`autofill` table) from Chrome
+/// `Web Data` / `Account Web Data`. Strictly NEVER queries `credit_cards`, `masked_credit_cards`,
+/// `local_ibans`, `masked_ibans`, `server_card_metadata`, `cvc_storage`, or `Login Data` (R4 safeguard).
+pub fn parse_autofill_only(profile_dir: &Path, warnings: &mut Vec<DiagnosticWarning>) -> Vec<AutofillRecord> {
+    let mut out = Vec::new();
+
+    for db_name in ["Web Data", "Account Web Data"] {
+        let db_path = profile_dir.join(db_name);
+        if !db_path.is_file() {
+            continue;
+        }
+        let db = match ForensicSqlite::open_snapshot(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                warnings.push(DiagnosticWarning::warn(
+                    "web_data_autofill",
+                    &db_path,
+                    format!("Failed to open {db_name}: {e}"),
+                ));
+                continue;
+            }
+        };
+        let tables = db.list_tables();
+        if tables.contains("autofill")
+            && let Ok(mut stmt) = db.conn.prepare(
+                "SELECT name, value, count, date_created, date_last_used FROM autofill ORDER BY date_last_used DESC",
+            )
+            && let Ok(rows) = stmt.query_map([], |r| {
+                Ok(AutofillRecord {
+                    name: r.get(0).unwrap_or_default(),
+                    value: r.get(1).unwrap_or_default(),
+                    count: r.get(2).unwrap_or(0),
+                    date_created: webdata_ts(r.get::<_, i64>(3).unwrap_or(0)),
+                    date_last_used: webdata_ts(r.get::<_, i64>(4).unwrap_or(0)),
+                })
+            })
+        {
+            out.extend(rows.flatten());
+        }
+    }
+
+    out
+}
+
 pub fn parse_web_data(profile_dir: &Path, warnings: &mut Vec<DiagnosticWarning>) -> WebDataAnalysis {
-    let mut out = WebDataAnalysis::default();
+    let mut out = WebDataAnalysis {
+        autofill: parse_autofill_only(profile_dir, warnings),
+        ..Default::default()
+    };
 
     for db_name in ["Web Data", "Account Web Data"] {
         let db_path = profile_dir.join(db_name);
@@ -95,23 +142,6 @@ pub fn parse_web_data(profile_dir: &Path, warnings: &mut Vec<DiagnosticWarning>)
             }
         };
         let tables = db.list_tables();
-
-        if tables.contains("autofill")
-            && let Ok(mut stmt) = db.conn.prepare(
-                "SELECT name, value, count, date_created, date_last_used FROM autofill ORDER BY date_last_used DESC",
-            )
-            && let Ok(rows) = stmt.query_map([], |r| {
-                Ok(AutofillRecord {
-                    name: r.get(0).unwrap_or_default(),
-                    value: r.get(1).unwrap_or_default(),
-                    count: r.get(2).unwrap_or(0),
-                    date_created: webdata_ts(r.get::<_, i64>(3).unwrap_or(0)),
-                    date_last_used: webdata_ts(r.get::<_, i64>(4).unwrap_or(0)),
-                })
-            })
-        {
-            out.autofill.extend(rows.flatten());
-        }
 
         // Legacy autofill_profiles + autofill_profile_names/emails/phones OR modern local_addresses/contact_info
         if tables.contains("autofill_profiles") {

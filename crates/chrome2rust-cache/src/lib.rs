@@ -1,10 +1,17 @@
 #![forbid(unsafe_code)]
 
 pub mod blockfile;
+pub mod carve_images;
+pub mod carve_video;
 pub mod decompress;
+pub mod exif;
 pub mod export;
+pub mod firefox;
+pub mod opera;
 pub mod pickle;
+pub mod safari;
 pub mod simple;
+pub mod unified_cache;
 
 use chrome2rust_core::error::{ChromeError, DiagnosticWarning};
 use chrome2rust_core::magic::{ContentDetection, is_generic_mime};

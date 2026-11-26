@@ -17,6 +17,8 @@ chrome2rust-core.workspace = true
 chrome2rust-cache.workspace = true
 chrome2rust-forensics.workspace = true
 chrome2rust-report.workspace = true
+guap-table.workspace = true
+guap-mcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
@@ -26,3 +28,4 @@ clap.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rusqlite.workspace = true

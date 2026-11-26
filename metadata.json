@@ -15,8 +15,10 @@
   "majorCapabilities": [
     "Simple Cache & Blockfile HTTP cache inspection and extraction",
     "Chromium User Data forensics (History, Cookies, Downloads, Logins, Extensions, Sessions, Storage)",
-    "Cross-platform OS keyring decryption & SHA-256 Merkle chain of custody",
-    "Native Win32 (WinSafe) & Iced 0.14 dual GUIs",
-    "8-tool read-only MCP JSON-RPC stdio server"
+    "Multi-browser non-credential forensics across Firefox, Opera (Blink & Presto), and Safari",
+    "Unified history/downloads/addons/bookmarks/autofill, search query extraction, and image EXIF + video stream carving",
+    "Cross-platform OS keyring decryption & SHA-256/512 Merkle chain of custody",
+    "Native Win32 (WinSafe) & Iced 0.14 dual GUIs with guap-kit data grids",
+    "29-tool read-only MCP JSON-RPC stdio server (8 legacy + 21 guap-mcp browser tools)"
   ]
 }

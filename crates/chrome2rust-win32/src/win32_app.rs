@@ -542,6 +542,127 @@ impl SimpleFilterListPage {
 }
 
 #[derive(Clone)]
+struct BrowserToolsPage {
+    page: gui::TabPage,
+    tool_combo: gui::ComboBox,
+    filter_edit: gui::Edit,
+    btn_apply: gui::Button,
+    btn_export: gui::Button,
+    info_lbl: gui::Label,
+    list: gui::ListView,
+    inspector: gui::Edit,
+}
+
+impl BrowserToolsPage {
+    fn new(parent: &(impl GuiParent + 'static)) -> Self {
+        let page = tab_page(parent);
+        lbl(&page, "Tool:", 10, 12, 38);
+        let tool_names = [
+            "fx_cache (Firefox Cache2)",
+            "fx_history (Firefox History)",
+            "fx_cookies (Firefox Cookies Metadata)",
+            "fx_bookmarks (Firefox Bookmarks)",
+            "fx_downloads (Firefox Downloads)",
+            "fx_formhistory (Firefox Form History)",
+            "fx_addons (Firefox Add-ons)",
+            "fx_sessions (Firefox Sessions)",
+            "opera_cache (Opera Cache)",
+            "opera_history (Opera History)",
+            "safari_cache (Safari Cache.db)",
+            "safari_history (Safari History)",
+            "safari_bookmarks (Safari Bookmarks)",
+            "unified_history (Unified History)",
+            "unified_downloads (Unified Downloads)",
+            "unified_addons (Unified Add-ons)",
+            "unified_bookmarks (Unified Bookmarks)",
+            "unified_autofill (Unified Autofill)",
+            "search_queries (Search Queries)",
+            "carve_images (Image Carver + EXIF)",
+            "carve_video (Video Carver + Reassembly)",
+        ];
+        let tool_combo = gui::ComboBox::new(
+            &page,
+            gui::ComboBoxOpts {
+                position: gui::dpi(52, 9),
+                width: gui::dpi_x(250),
+                items: &tool_names,
+                selected_item: Some(0),
+                ..Default::default()
+            },
+        );
+        lbl(&page, "Filter:", 312, 12, 42);
+        let filter_edit = edit(&page, 356, 9, 220, 22, (gui::Horz::None, gui::Vert::None));
+        let btn_apply = btn(&page, "Apply", 584, 8, 68, 24, (gui::Horz::None, gui::Vert::None));
+        let btn_export = btn(
+            &page,
+            "Export CSV...",
+            660,
+            8,
+            96,
+            24,
+            (gui::Horz::None, gui::Vert::None),
+        );
+        let info_lbl = lbl(
+            &page,
+            "Select any of the 21 non-credential browser tools or media carvers above.",
+            10,
+            38,
+            920,
+        );
+
+        let list = make_list(
+            &page,
+            10,
+            60,
+            940,
+            260,
+            &[
+                ("Column 1", 220),
+                ("Column 2", 220),
+                ("Column 3", 220),
+                ("Column 4", 220),
+            ],
+            false,
+        );
+        let inspector = readonly_multiline(&page, 10, 328, 940, 150);
+
+        {
+            let list = list.clone();
+            let inspector = inspector.clone();
+            let info_lbl = info_lbl.clone();
+            page.on().wm_size(move |p| {
+                if p.request == co::SIZE_R::MINIMIZED || p.client_area.cx <= 0 || p.client_area.cy <= 0 {
+                    return Ok(());
+                }
+                let w = p.client_area.cx;
+                let h = p.client_area.cy;
+                let pad = gui::dpi_x(10);
+                let full_w = (w - 2 * pad).max(gui::dpi_x(240));
+                move_ctrl(&info_lbl, pad, gui::dpi_y(38), full_w, gui::dpi_y(18));
+                let list_y = gui::dpi_y(60);
+                let insp_h = gui::dpi_y(145);
+                let gap = gui::dpi_y(8);
+                let list_h = (h - list_y - insp_h - gap - gui::dpi_y(8)).max(gui::dpi_y(120));
+                move_ctrl(&list, pad, list_y, full_w, list_h);
+                move_ctrl(&inspector, pad, list_y + list_h + gap, full_w, insp_h);
+                Ok(())
+            });
+        }
+
+        Self {
+            page,
+            tool_combo,
+            filter_edit,
+            btn_apply,
+            btn_export,
+            info_lbl,
+            list,
+            inspector,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Win32App {
     wnd: gui::WindowMain,
     target_edit: gui::Edit,
@@ -566,6 +687,7 @@ struct Win32App {
     creds_pg: SimpleFilterListPage,
     ext_pg: SimpleFilterListPage,
     sess_pg: SimpleFilterListPage,
+    browser_pg: BrowserToolsPage,
 
     status_bar: gui::StatusBar,
     state: Arc<Mutex<Win32State>>,
@@ -750,6 +872,10 @@ fn build_main_menu() -> w::SysResult<w::HMENU> {
         w::MenuItem::Entry {
             cmd_id: IDM_TAB_BASE + 7,
             text: "Sessions && Storage",
+        },
+        w::MenuItem::Entry {
+            cmd_id: IDM_TAB_BASE + 8,
+            text: "Multi-Browser && Carvers",
         },
     ])?;
 
@@ -961,6 +1087,8 @@ pub fn run(launch: LaunchArgs) -> anyhow::Result<()> {
         "Inspect SNSS session/tab stacks, LevelDB Local/Session Storage, IndexedDB origins, and profile inventory.",
     );
 
+    let browser_pg = BrowserToolsPage::new(&wnd);
+
     let tab_pages = vec![
         cache_pg.page.clone(),
         overview_pg.page.clone(),
@@ -970,6 +1098,7 @@ pub fn run(launch: LaunchArgs) -> anyhow::Result<()> {
         creds_pg.page.clone(),
         ext_pg.page.clone(),
         sess_pg.page.clone(),
+        browser_pg.page.clone(),
     ];
 
     let tab = gui::Tab::new(
@@ -987,6 +1116,7 @@ pub fn run(launch: LaunchArgs) -> anyhow::Result<()> {
                 ("Credentials && Cookies", creds_pg.page.clone()),
                 ("Extensions && Bookmarks", ext_pg.page.clone()),
                 ("Sessions && Storage", sess_pg.page.clone()),
+                ("Multi-Browser && Carvers", browser_pg.page.clone()),
             ],
             ..Default::default()
         },
@@ -1025,6 +1155,7 @@ pub fn run(launch: LaunchArgs) -> anyhow::Result<()> {
         creds_pg,
         ext_pg,
         sess_pg,
+        browser_pg,
         status_bar,
         state,
         suppress_sync: Arc::new(AtomicBool::new(false)),
@@ -1933,6 +2064,104 @@ impl Win32App {
         self.refresh_creds_tab();
         self.refresh_extensions_tab();
         self.refresh_sessions_tab();
+        if self.tab.items().selected().map(|i| i.index()).unwrap_or(0) == 8 {
+            self.refresh_browser_tools_tab();
+        }
+    }
+
+    fn refresh_browser_tools_tab(&self) {
+        let tool_idx = self.browser_pg.tool_combo.items().selected_index().unwrap_or(0) as usize;
+        let filter_txt = self.browser_pg.filter_edit.text().unwrap_or_default();
+
+        let (status_msg, cols, row_cells) = {
+            let mut st = self.state.lock().unwrap();
+            st.ensure_browser_grid_loaded();
+            if st.browser_grid.active_tool_idx != tool_idx {
+                st.browser_grid.select_tool(tool_idx);
+            }
+            if st.browser_grid.filter_text != filter_txt {
+                st.browser_grid.set_filter(filter_txt);
+            } else {
+                st.browser_grid.refresh();
+            }
+            let cols: Vec<(String, i32)> = st
+                .browser_grid
+                .columns()
+                .iter()
+                .map(|c| (c.label.clone(), (c.width_hint as i32).max(70)))
+                .collect();
+            let col_count = cols.len();
+            let max_rows = st.browser_grid.row_count().min(MAX_WIN32_LIST_ROWS);
+            let mut rows_out = Vec::with_capacity(max_rows);
+            for r in 0..max_rows {
+                let mut cells = Vec::with_capacity(col_count);
+                for c in 0..col_count {
+                    cells.push(st.browser_grid.cell_text(r, c));
+                }
+                rows_out.push(cells);
+            }
+            (st.browser_grid.status_message.clone(), cols, rows_out)
+        };
+
+        let _ = self.browser_pg.info_lbl.hwnd().SetWindowText(&status_msg);
+        self.browser_pg.list.set_redraw(false);
+        let _ = self.browser_pg.list.items().delete_all();
+        loop {
+            let count = self.browser_pg.list.cols().count().unwrap_or(0);
+            if count == 0 {
+                break;
+            }
+            if unsafe {
+                self.browser_pg
+                    .list
+                    .hwnd()
+                    .SendMessage(msg::LvmDeleteColumn { index: 0 })
+            }
+            .is_err()
+            {
+                break;
+            }
+        }
+        for (label, width) in &cols {
+            let _ = self.browser_pg.list.cols().add(label, gui::dpi_x(*width));
+        }
+        for row in &row_cells {
+            let refs: Vec<&str> = row.iter().map(String::as_str).collect();
+            let _ = self.browser_pg.list.items().add(&refs, None, ());
+        }
+        self.browser_pg.list.set_redraw(true);
+        let _ = self
+            .browser_pg
+            .inspector
+            .set_text("Select a row to inspect details and raw bytes.");
+    }
+
+    fn trigger_export_browser_tool(&self) {
+        if let Ok(Some(dest)) = pick_save_file(
+            self.wnd.hwnd(),
+            "Export Multi-Browser Tool Table",
+            "chrome2rust_tool_export.csv",
+            "csv",
+            &[("CSV (*.csv)", "*.csv")],
+        ) {
+            let msg = {
+                let mut st = self.state.lock().unwrap();
+                st.ensure_browser_grid_loaded();
+                match st.browser_grid.export_to_path(&dest, guap_export::ExportFormat::Csv) {
+                    Ok(m) => format!(
+                        "Exported {} rows to {} (SHA-256 Merkle root: {})",
+                        st.browser_grid.row_count(),
+                        dest.display(),
+                        m.merkle_root_sha256
+                    ),
+                    Err(e) => format!("Export error: {e}"),
+                }
+            };
+            let _ = self
+                .wnd
+                .hwnd()
+                .MessageBox(&msg, "Multi-Browser Tool Export", co::MB::ICONINFORMATION);
+        }
     }
 
     fn trigger_browse_and_load(&self) {
@@ -2333,6 +2562,9 @@ impl Win32App {
         self.tab.on().tcn_sel_change(move || {
             let idx = self2.tab.items().selected().map(|i| i.index()).unwrap_or(0);
             self2.layout_active_tab_page(idx);
+            if idx == 8 {
+                self2.refresh_browser_tools_tab();
+            }
             Ok(())
         });
 
@@ -2687,6 +2919,39 @@ impl Win32App {
                 Ok(())
             });
         }
+        {
+            let app = self.clone();
+            self.browser_pg.tool_combo.on().cbn_sel_change(move || {
+                app.refresh_browser_tools_tab();
+                Ok(())
+            });
+        }
+        {
+            let app = self.clone();
+            self.browser_pg.btn_apply.on().bn_clicked(move || {
+                app.refresh_browser_tools_tab();
+                Ok(())
+            });
+        }
+        {
+            let app = self.clone();
+            self.browser_pg.btn_export.on().bn_clicked(move || {
+                app.trigger_export_browser_tool();
+                Ok(())
+            });
+        }
+        {
+            let app = self.clone();
+            self.browser_pg.list.on().lvn_item_changed(move |p| {
+                if p.uNewState.has(co::LVIS::SELECTED) && p.iItem >= 0 {
+                    let mut st = app.state.lock().unwrap();
+                    st.browser_grid.selected_row = Some(p.iItem as usize);
+                    let txt = st.browser_grid.format_inspector_crlf();
+                    let _ = app.browser_pg.inspector.set_text(&txt);
+                }
+                Ok(())
+            });
+        }
 
         // Menu Bar Commands
         let wire_menu = |id: u16, handler: Box<dyn Fn(&Win32App)>| {
@@ -2917,10 +3182,15 @@ impl Win32App {
             }),
         );
         wire_menu(IDM_CUSTODY_AUDIT, Box::new(|a| a.trigger_custody_audit()));
-        for idx in 0u16..8u16 {
+        for idx in 0u16..9u16 {
             wire_menu(
                 IDM_TAB_BASE + idx,
-                Box::new(move |a| a.select_tab_index(u32::from(idx))),
+                Box::new(move |a| {
+                    a.select_tab_index(u32::from(idx));
+                    if idx == 8 {
+                        a.refresh_browser_tools_tab();
+                    }
+                }),
             );
         }
         wire_menu(

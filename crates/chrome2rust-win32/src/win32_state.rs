@@ -9,9 +9,11 @@ use chrome2rust_core::discovery::{DiscoveredBrowser, discover_local_browsers};
 use chrome2rust_core::time::format_local_opt;
 use chrome2rust_forensics::custody::{CustodyManifest, generate_custody_manifest, write_custody_manifest};
 use chrome2rust_forensics::findings::FindingSeverity;
+use chrome2rust_forensics::providers::build_browser_tool_providers;
 use chrome2rust_forensics::{AnalysisOptions, ProfileAnalysis, UserDataReport, analyze_user_data};
 use chrome2rust_report::markdown::format_bytes;
 use chrome2rust_report::{ReportFormat, write_report};
+use guap_gui_win32::{Win32GridState, Win32TableHostConfig};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
@@ -160,6 +162,9 @@ pub struct Win32State {
     pub status_message: String,
     pub initial_load_path: Option<PathBuf>,
     pub initial_pick: bool,
+
+    pub browser_grid: Win32GridState,
+    pub browser_grid_loaded: bool,
 }
 
 impl Win32State {
@@ -218,7 +223,34 @@ impl Win32State {
                 .to_string(),
             initial_load_path,
             initial_pick: initial.pick,
+
+            browser_grid: Win32GridState::new(Win32TableHostConfig::default(), Vec::new(), Vec::new()),
+            browser_grid_loaded: false,
         }
+    }
+
+    pub fn ensure_browser_grid_loaded(&mut self) {
+        if self.browser_grid_loaded {
+            return;
+        }
+        let trimmed = self.path_input.trim();
+        let target = if trimmed.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(trimmed))
+        };
+        let providers = build_browser_tool_providers(target.as_deref());
+        self.browser_grid = Win32GridState::new(
+            Win32TableHostConfig {
+                app_title: "Multi-Browser & Carvers".to_string(),
+                dark_mode: false,
+                show_hex_pane: true,
+                default_export_dir: None,
+            },
+            providers,
+            Vec::new(),
+        );
+        self.browser_grid_loaded = true;
     }
 
     pub fn crypto_options(&self) -> CryptoOptions {
@@ -253,6 +285,7 @@ impl Win32State {
         self.path_input = path.display().to_string();
         self.selected_profile_idx = None;
         self.selected_filtered_pos = None;
+        self.browser_grid_loaded = false;
 
         if !path.exists() {
             self.is_loading = false;

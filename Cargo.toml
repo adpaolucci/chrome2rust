@@ -31,6 +31,12 @@ chrome2rust-forensics = { path = "crates/chrome2rust-forensics" }
 chrome2rust-report = { path = "crates/chrome2rust-report" }
 chrome2rust-mcp = { path = "crates/chrome2rust-mcp" }
 
+guap-table = { path = "../guap-kit/crates/guap-table" }
+guap-export = { path = "../guap-kit/crates/guap-export" }
+guap-mcp = { path = "../guap-kit/crates/guap-mcp" }
+guap-gui-win32 = { path = "../guap-kit/crates/guap-gui-win32", default-features = false }
+guap-gui-iced = { path = "../guap-kit/crates/guap-gui-iced" }
+
 anyhow = "1.0"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }

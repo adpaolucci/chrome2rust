@@ -1,23 +1,420 @@
 #![forbid(unsafe_code)]
 
+use chrome2rust_cache::carve_images::ImageCarveTableProvider;
+use chrome2rust_cache::carve_video::VideoCarveTableProvider;
 use chrome2rust_cache::export::{ExtractFilenameMode, ExtractOptions, extract_cache_entries};
 use chrome2rust_cache::simple::parse_simple_entry_file;
 use chrome2rust_cache::{CacheScanOptions, CacheSortField, load_cache_from_paths, sort_cache_entries};
 use chrome2rust_core::crypto::CryptoOptions;
-use chrome2rust_core::discovery::{ArtifactFormat, ArtifactSniffer, discover_local_browsers, resolve_target_path};
+use chrome2rust_core::discovery::{
+    ArtifactFormat, ArtifactSniffer, UnifiedBrowserKind, discover_local_browsers, resolve_target_path,
+};
 use chrome2rust_forensics::custody::{generate_custody_manifest, write_custody_manifest};
+use chrome2rust_forensics::providers::{build_browser_tool_provider_by_id, build_browser_tool_providers};
+use chrome2rust_forensics::search_queries::SearchQueriesTableProvider;
+use chrome2rust_forensics::unified::{
+    UnifiedAddonsTableProvider, UnifiedAutofillTableProvider, UnifiedBookmarksTableProvider,
+    UnifiedDownloadsTableProvider, UnifiedHistoryTableProvider, UnifiedQueryOptions,
+};
 use chrome2rust_forensics::{AnalysisOptions, analyze_user_data};
 use chrome2rust_report::{ReportFormat, write_report};
-use serde_json::{Value, json};
+use guap_mcp::{ActionCommand, ActionRiskLevel, McpServerRegistry, McpToolError, PolicyMode};
+use guap_table::{FilterExpr, GetNirQuery, SortDirection, TableData, TableProvider, TableQuery, TableSchema};
+use serde_json::{Map, Value, json};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "chrome2rust-mcp";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub fn get_tools_manifest() -> Value {
+const LEGACY_TOOL_NAMES: &[&str] = &[
+    "chrome2rust_profiles",
+    "chrome2rust_sniff",
+    "chrome2rust_cache_list",
+    "chrome2rust_cache_inspect",
+    "chrome2rust_cache_extract",
+    "chrome2rust_analyze",
+    "chrome2rust_report",
+    "chrome2rust_custody",
+];
+
+struct BrowserTableAction {
+    tool_id: &'static str,
+    description: &'static str,
+    schema: TableSchema,
+    default_path: Option<PathBuf>,
+    policy: PolicyMode,
+}
+
+impl ActionCommand for BrowserTableAction {
+    fn command_id(&self) -> &'static str {
+        self.tool_id
+    }
+
+    fn description(&self) -> &'static str {
+        self.description
+    }
+
+    fn risk_level(&self) -> ActionRiskLevel {
+        ActionRiskLevel::ReadOnly
+    }
+
+    fn input_schema(&self) -> Value {
+        let col_ids: Vec<Value> = self
+            .schema
+            .columns
+            .iter()
+            .map(|c| Value::String(c.id.clone()))
+            .collect();
+        let mut props = Map::new();
+        props.insert(
+            "path".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional path to browser profile, cache directory, or multi-browser container (auto-discovers local browsers when omitted)"
+            }),
+        );
+        props.insert(
+            "filter".to_string(),
+            json!({
+                "description": "Filter expression string (GetNir syntax) or structured FilterExpr object"
+            }),
+        );
+        props.insert(
+            "sort".to_string(),
+            json!({
+                "type": "array",
+                "description": "Sort clauses as [{ column, direction }]",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "column": { "type": "string", "enum": col_ids },
+                        "direction": { "type": "string", "enum": ["asc", "desc"] }
+                    },
+                    "required": ["column"]
+                }
+            }),
+        );
+        props.insert(
+            "columns".to_string(),
+            json!({
+                "type": "array",
+                "description": "Optional projected column IDs",
+                "items": { "type": "string", "enum": col_ids }
+            }),
+        );
+        props.insert(
+            "offset".to_string(),
+            json!({ "type": "integer", "minimum": 0, "default": 0 }),
+        );
+        props.insert("limit".to_string(), json!({ "type": "integer", "minimum": 1 }));
+        if self.tool_id.starts_with("chrome2rust_unified_") || self.tool_id == "chrome2rust_search_queries" {
+            props.insert(
+                "browser".to_string(),
+                json!({ "type": "string", "description": "Optional browser filter (chrome, edge, brave, opera, firefox, safari)" }),
+            );
+        }
+        if self.tool_id == "chrome2rust_search_queries" {
+            props.insert(
+                "engine".to_string(),
+                json!({ "type": "string", "description": "Optional search engine filter (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, YouTube, Brave Search)" }),
+            );
+        }
+        if self.tool_id == "chrome2rust_carve_images" || self.tool_id == "chrome2rust_carve_video" {
+            props.insert(
+                "extract_dir".to_string(),
+                json!({ "type": "string", "description": "Optional output directory to write carved media files" }),
+            );
+        }
+        if self.tool_id == "chrome2rust_carve_images" {
+            props.insert(
+                "min_size".to_string(),
+                json!({ "type": "integer", "minimum": 0, "description": "Minimum image payload size in bytes" }),
+            );
+        }
+
+        json!({
+            "type": "object",
+            "properties": Value::Object(props),
+            "additionalProperties": false
+        })
+    }
+
+    fn execute(&self, args: &Value, _dry_run: bool) -> Result<Value, McpToolError> {
+        let target_path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| self.default_path.clone());
+
+        let browser_filter = match args.get("browser").and_then(Value::as_str) {
+            Some(b) if !b.trim().is_empty() => Some(
+                UnifiedBrowserKind::from_filter(b)
+                    .ok_or_else(|| McpToolError::InvalidParams(format!("unknown browser filter '{b}'")))?,
+            ),
+            _ => None,
+        };
+
+        let provider: Arc<dyn TableProvider> = match self.tool_id {
+            "chrome2rust_unified_history" => Arc::new(UnifiedHistoryTableProvider::with_options(UnifiedQueryOptions {
+                paths: target_path.into_iter().collect(),
+                browser_filter,
+                ..Default::default()
+            })),
+            "chrome2rust_unified_downloads" => {
+                Arc::new(UnifiedDownloadsTableProvider::with_options(UnifiedQueryOptions {
+                    paths: target_path.into_iter().collect(),
+                    browser_filter,
+                    ..Default::default()
+                }))
+            }
+            "chrome2rust_unified_addons" => Arc::new(UnifiedAddonsTableProvider::with_options(UnifiedQueryOptions {
+                paths: target_path.into_iter().collect(),
+                browser_filter,
+                ..Default::default()
+            })),
+            "chrome2rust_unified_bookmarks" => {
+                Arc::new(UnifiedBookmarksTableProvider::with_options(UnifiedQueryOptions {
+                    paths: target_path.into_iter().collect(),
+                    browser_filter,
+                    ..Default::default()
+                }))
+            }
+            "chrome2rust_unified_autofill" => {
+                Arc::new(UnifiedAutofillTableProvider::with_options(UnifiedQueryOptions {
+                    paths: target_path.into_iter().collect(),
+                    browser_filter,
+                    ..Default::default()
+                }))
+            }
+            "chrome2rust_search_queries" => {
+                let engine_filter = args
+                    .get("engine")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string);
+                Arc::new(SearchQueriesTableProvider::with_options(
+                    UnifiedQueryOptions {
+                        paths: target_path.into_iter().collect(),
+                        browser_filter,
+                        ..Default::default()
+                    },
+                    engine_filter,
+                ))
+            }
+            "chrome2rust_carve_images" => {
+                let extract_dir = match args.get("extract_dir") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) if s.trim().is_empty() => None,
+                    Some(Value::String(s)) => {
+                        if self.policy == PolicyMode::ReadOnlyOnly {
+                            return Err(McpToolError::PolicyDenied(
+                                "extract_dir writes carved files to disk and is denied under PolicyMode::ReadOnlyOnly"
+                                    .into(),
+                            ));
+                        }
+                        Some(PathBuf::from(s))
+                    }
+                    Some(_) => {
+                        return Err(McpToolError::InvalidParams(
+                            "'extract_dir' must be a string path".into(),
+                        ));
+                    }
+                };
+                let min_size = args
+                    .get("min_size")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok());
+                Arc::new(ImageCarveTableProvider::with_options(
+                    target_path.into_iter().collect(),
+                    extract_dir,
+                    min_size,
+                ))
+            }
+            "chrome2rust_carve_video" => {
+                let extract_dir = match args.get("extract_dir") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) if s.trim().is_empty() => None,
+                    Some(Value::String(s)) => {
+                        if self.policy == PolicyMode::ReadOnlyOnly {
+                            return Err(McpToolError::PolicyDenied(
+                                "extract_dir writes carved files to disk and is denied under PolicyMode::ReadOnlyOnly"
+                                    .into(),
+                            ));
+                        }
+                        Some(PathBuf::from(s))
+                    }
+                    Some(_) => {
+                        return Err(McpToolError::InvalidParams(
+                            "'extract_dir' must be a string path".into(),
+                        ));
+                    }
+                };
+                Arc::new(VideoCarveTableProvider::with_options(
+                    target_path.into_iter().collect(),
+                    extract_dir,
+                ))
+            }
+            _ => build_browser_tool_provider_by_id(self.tool_id, target_path.as_deref())
+                .ok_or_else(|| McpToolError::NotFound(self.tool_id.to_string()))?,
+        };
+
+        let query = parse_mcp_table_query(&self.schema, args)?;
+        let data = provider.query(&query)?;
+        Ok(serialize_table_data(&data))
+    }
+}
+
+fn parse_mcp_table_query(schema: &TableSchema, args: &Value) -> Result<TableQuery, McpToolError> {
+    let obj = match args {
+        Value::Null => return Ok(TableQuery::default()),
+        Value::Object(m) => m,
+        _ => return Err(McpToolError::InvalidParams("arguments must be a JSON object".into())),
+    };
+
+    let filter = match obj.get("filter") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.trim().is_empty() => None,
+        Some(Value::String(s)) => Some(GetNirQuery::parse_filter(s)?),
+        Some(other) => {
+            let expr: FilterExpr = serde_json::from_value(other.clone())
+                .map_err(|e| McpToolError::InvalidParams(format!("invalid filter object: {e}")))?;
+            Some(expr)
+        }
+    };
+
+    let sort = match obj.get("sort") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(spec)) => {
+            let parsed = GetNirQuery::parse_sort(spec)?;
+            let mut resolved = Vec::with_capacity(parsed.len());
+            for (col, dir) in parsed {
+                let idx = schema
+                    .column_index(&col)
+                    .ok_or_else(|| McpToolError::InvalidParams(format!("invalid sort column '{col}'")))?;
+                resolved.push((idx, dir));
+            }
+            resolved
+        }
+        Some(Value::Array(items)) => {
+            let mut resolved = Vec::with_capacity(items.len());
+            for item in items {
+                let item_obj = item
+                    .as_object()
+                    .ok_or_else(|| McpToolError::InvalidParams("sort entries must be objects".into()))?;
+                let col = item_obj
+                    .get("column")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| McpToolError::InvalidParams("sort entry missing 'column'".into()))?;
+                let idx = schema
+                    .column_index(col)
+                    .ok_or_else(|| McpToolError::InvalidParams(format!("invalid sort column '{col}'")))?;
+                let dir = match item_obj.get("direction").and_then(Value::as_str) {
+                    None | Some("asc") | Some("ASC") => SortDirection::Asc,
+                    Some("desc") | Some("DESC") => SortDirection::Desc,
+                    Some(other) => {
+                        return Err(McpToolError::InvalidParams(format!("invalid sort direction '{other}'")));
+                    }
+                };
+                resolved.push((idx, dir));
+            }
+            resolved
+        }
+        Some(_) => return Err(McpToolError::InvalidParams("'sort' must be an array or string".into())),
+    };
+
+    let columns = match obj.get("columns") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(arr)) => {
+            let mut cols = Vec::with_capacity(arr.len());
+            for item in arr {
+                let c = item
+                    .as_str()
+                    .ok_or_else(|| McpToolError::InvalidParams("'columns' items must be strings".into()))?;
+                cols.push(c.to_string());
+            }
+            Some(cols)
+        }
+        Some(_) => return Err(McpToolError::InvalidParams("'columns' must be an array".into())),
+    };
+
+    let offset = match obj.get("offset") {
+        None | Some(Value::Null) => 0usize,
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| McpToolError::InvalidParams("'offset' must be a non-negative integer".into()))?,
+    };
+
+    let limit = match obj.get("limit") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|&n| n > 0)
+                .ok_or_else(|| McpToolError::InvalidParams("'limit' must be a positive integer".into()))?;
+            Some(n)
+        }
+    };
+
+    Ok(TableQuery {
+        filter,
+        sort,
+        columns,
+        offset,
+        limit,
+    })
+}
+
+fn serialize_table_data(data: &TableData) -> Value {
+    let rows: Vec<Value> = data
+        .rows
+        .iter()
+        .map(|row| {
+            let mut row_obj = Map::with_capacity(data.schema.columns.len() + 2);
+            row_obj.insert("row_id".to_string(), json!(row.id));
+            for (idx, col) in data.schema.columns.iter().enumerate() {
+                let val = row.cells.get(idx).map(|c| c.to_json_value()).unwrap_or(Value::Null);
+                row_obj.insert(col.id.clone(), val);
+            }
+            if let Some(detail) = &row.detail_json {
+                row_obj.insert("detail_json".to_string(), detail.clone());
+            }
+            Value::Object(row_obj)
+        })
+        .collect();
+
+    json!({
+        "tool_id": data.schema.tool_id,
+        "title": data.schema.title,
+        "total_rows": data.total_rows,
+        "returned_rows": rows.len(),
+        "columns": data.schema.columns,
+        "rows": rows,
+    })
+}
+
+/// Builds the `guap-mcp` server registry containing all 21 read-only browser tools.
+pub fn build_guap_registry(default_path: Option<&Path>) -> McpServerRegistry {
+    let mut registry = McpServerRegistry::new(PolicyMode::ReadOnlyOnly).with_server_info(SERVER_NAME, SERVER_VERSION);
+    for provider in build_browser_tool_providers(default_path) {
+        registry.register_action(Arc::new(BrowserTableAction {
+            tool_id: provider.tool_id(),
+            description: provider.description(),
+            schema: provider.schema(),
+            default_path: default_path.map(|p| p.to_path_buf()),
+            policy: PolicyMode::ReadOnlyOnly,
+        }));
+    }
+    registry
+}
+
+pub fn get_legacy_tools_manifest() -> Value {
     json!([
         {
             "name": "chrome2rust_profiles",
@@ -124,6 +521,14 @@ pub fn get_tools_manifest() -> Value {
             }
         }
     ])
+}
+
+pub fn get_tools_manifest() -> Value {
+    let mut tools = get_legacy_tools_manifest().as_array().cloned().unwrap_or_default();
+    if let Some(new_tools) = build_guap_registry(None).list_tools().as_array() {
+        tools.extend(new_tools.iter().cloned());
+    }
+    Value::Array(tools)
 }
 
 pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
@@ -331,7 +736,7 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
             }
             serde_json::to_value(manifest).map_err(|e| e.to_string())
         }
-        other => Err(format!("Unknown chrome2rust MCP tool: {other}")),
+        other => build_guap_registry(None).dispatch(other, args).map_err(|e| e.message),
     }
 }
 
@@ -371,19 +776,23 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
         "tools/call" => {
             let params = &req["params"];
             let tool_name = params["name"].as_str().unwrap_or("");
-            let args = &params["arguments"];
-            let (text, is_err) = match call_tool(tool_name, args) {
-                Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_default(), false),
-                Err(msg) => (msg, true),
-            };
-            Some(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "content": [{ "type": "text", "text": text }],
-                    "isError": is_err
-                }
-            }))
+            if LEGACY_TOOL_NAMES.contains(&tool_name) {
+                let args = &params["arguments"];
+                let (text, is_err) = match call_tool(tool_name, args) {
+                    Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_default(), false),
+                    Err(msg) => (msg, true),
+                };
+                Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{ "type": "text", "text": text }],
+                        "isError": is_err
+                    }
+                }))
+            } else {
+                build_guap_registry(None).handle_jsonrpc_request(req)
+            }
         }
         _ => id.map(|req_id| {
             json!({
@@ -541,5 +950,126 @@ mod tests {
             }))
             .is_none()
         );
+    }
+
+    #[test]
+    fn test_mcp_all_29_tools_readonly_policy_and_r4_checks() {
+        let manifest = get_tools_manifest();
+        let arr = manifest.as_array().unwrap();
+        assert_eq!(arr.len(), 29);
+        assert!(!arr.iter().any(|t| t["name"] == "chrome2rust_cache_delete"));
+
+        let new_tools: Vec<_> = arr
+            .iter()
+            .filter(|t| !LEGACY_TOOL_NAMES.contains(&t["name"].as_str().unwrap_or("")))
+            .collect();
+        assert_eq!(new_tools.len(), 21);
+        for t in new_tools {
+            assert_eq!(t["annotations"]["readOnlyHint"], true);
+            assert_eq!(t["annotations"]["destructiveHint"], false);
+        }
+
+        // Test JSON-RPC initialize + tools/list + tools/call on new ReadOnly tools
+        let init_resp = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize"
+        }))
+        .unwrap();
+        assert_eq!(init_resp["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+
+        let list_resp = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }))
+        .unwrap();
+        assert_eq!(list_resp["result"]["tools"].as_array().unwrap().len(), 29);
+
+        // Synthetic Firefox + Chrome Web Data fixture for R4 over MCP
+        let dir = TempDir::new().unwrap();
+        let fx = dir.path().join("FirefoxProfile");
+        std::fs::create_dir_all(&fx).unwrap();
+        let fxc = rusqlite::Connection::open(fx.join("cookies.sqlite")).unwrap();
+        fxc.execute_batch(
+            "CREATE TABLE moz_cookies(id INTEGER PRIMARY KEY, name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER, creationTime INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER);
+             INSERT INTO moz_cookies VALUES (1, 'sid', 'SECRET_MCP_COOKIE_VAL', '.example.com', '/', 1800000000, 1794700800000000, 1794700000000000, 1, 1, 1);",
+        )
+        .unwrap();
+
+        let ch = dir.path().join("ChromeUD").join("Default");
+        std::fs::create_dir_all(&ch).unwrap();
+        let wd = rusqlite::Connection::open(ch.join("Web Data")).unwrap();
+        wd.execute_batch(
+            "CREATE TABLE autofill(name TEXT, value TEXT, value_lower TEXT, date_created INTEGER, date_last_used INTEGER, count INTEGER);
+             CREATE TABLE credit_cards(guid TEXT, name_on_card TEXT, expiration_month INTEGER, expiration_year INTEGER, card_number_encrypted BLOB, date_modified INTEGER, origin TEXT, use_count INTEGER, use_date INTEGER, billing_address_id TEXT, nickname TEXT);
+             INSERT INTO autofill VALUES ('username', 'alice', 'alice', 1794700000, 1794700800, 2);
+             INSERT INTO credit_cards VALUES ('cc1', 'SECRET_MCP_CARDHOLDER', 12, 2029, X'0102', 1794700800, '', 1, 1794700800, '', 'Visa');",
+        )
+        .unwrap();
+
+        let fx_cookies_call = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "chrome2rust_fx_cookies",
+                "arguments": { "path": fx.to_string_lossy() }
+            }
+        }))
+        .unwrap();
+        let cookies_txt = fx_cookies_call["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(cookies_txt.contains(".example.com"));
+        assert!(!cookies_txt.contains("SECRET_MCP_COOKIE_VAL"));
+
+        let af_call = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "chrome2rust_unified_autofill",
+                "arguments": { "path": dir.path().to_string_lossy() }
+            }
+        }))
+        .unwrap();
+        let af_txt = af_call["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(af_txt.contains("alice"));
+        assert!(!af_txt.contains("SECRET_MCP_CARDHOLDER"));
+
+        // B.2: extract_dir must be denied under PolicyMode::ReadOnlyOnly (-32003) and never write to disk
+        for carve_tool in ["chrome2rust_carve_images", "chrome2rust_carve_video"] {
+            let blocked_dir = dir.path().join(format!("blocked_{carve_tool}"));
+            let resp = handle_jsonrpc_request(&json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": carve_tool,
+                    "arguments": {
+                        "path": dir.path().to_string_lossy(),
+                        "extract_dir": blocked_dir.to_string_lossy()
+                    }
+                }
+            }))
+            .unwrap();
+            assert_eq!(
+                resp["error"]["code"], -32003,
+                "expected PolicyDenied for {carve_tool}: {resp}"
+            );
+            assert!(!blocked_dir.exists());
+
+            // Without extract_dir, read-only invocation succeeds
+            let ok_resp = handle_jsonrpc_request(&json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": carve_tool,
+                    "arguments": { "path": dir.path().to_string_lossy() }
+                }
+            }))
+            .unwrap();
+            assert_eq!(ok_resp["result"]["isError"], false);
+        }
     }
 }

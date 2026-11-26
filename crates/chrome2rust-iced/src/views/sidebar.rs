@@ -89,6 +89,7 @@ pub fn view_sidebar(app: &App) -> Element<'_, Message> {
             WorkspaceTab::CredsCookies => format!("{creds_n}"),
             WorkspaceTab::ExtensionsBookmarks => format!("{ext_n}"),
             WorkspaceTab::SessionsStorage => format!("{sess_n}"),
+            WorkspaceTab::BrowserTools => "21".to_string(),
         };
         let active = app.active_tab == *tab;
         items = items.push(

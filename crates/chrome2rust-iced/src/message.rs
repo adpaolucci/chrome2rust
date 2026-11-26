@@ -15,6 +15,7 @@ pub enum WorkspaceTab {
     CredsCookies,
     ExtensionsBookmarks,
     SessionsStorage,
+    BrowserTools,
 }
 
 impl WorkspaceTab {
@@ -28,6 +29,7 @@ impl WorkspaceTab {
             Self::CredsCookies,
             Self::ExtensionsBookmarks,
             Self::SessionsStorage,
+            Self::BrowserTools,
         ]
     }
 
@@ -41,6 +43,7 @@ impl WorkspaceTab {
             Self::CredsCookies => "Cookies, Logins & Autofill",
             Self::ExtensionsBookmarks => "Extensions & Bookmarks",
             Self::SessionsStorage => "Sessions & Storage",
+            Self::BrowserTools => "Multi-Browser & Carvers",
         }
     }
 }
@@ -259,4 +262,7 @@ pub enum Message {
     // Custody manifest
     ComputeCustodyManifest,
     SaveCustodyManifest,
+
+    // Multi-Browser & Carvers guap-gui-iced DataGrid
+    BrowserToolsGrid(guap_gui_iced::DataGridMessage),
 }

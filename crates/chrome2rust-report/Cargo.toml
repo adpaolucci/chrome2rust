@@ -12,6 +12,8 @@ description = "Self-contained HTML, JSON, Markdown, and chain-of-custody forensi
 chrome2rust-core.workspace = true
 chrome2rust-cache.workspace = true
 chrome2rust-forensics.workspace = true
+guap-table.workspace = true
+guap-export.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
