@@ -190,7 +190,7 @@ impl TableProvider for ImageCarveTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Carve cached images across browsers with magic-byte validation, dimension extraction, and pure-Rust TIFF/EXIF IFD + GPS metadata (ImageCacheViewer equivalent)."
+        "Carve cached images across browsers with magic-byte validation, dimension extraction, and pure-Rust TIFF/EXIF IFD + GPS metadata."
     }
 
     fn schema(&self) -> TableSchema {

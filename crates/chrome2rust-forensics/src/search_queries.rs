@@ -317,7 +317,7 @@ impl TableProvider for SearchQueriesTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Extract search engine queries (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, YouTube, Brave, Startpage, Ecosia) from history, cache URLs/Referer headers, and sessions (MyLastSearch equivalent)."
+        "Extract search engine queries (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, YouTube, Brave, Startpage, Ecosia) from history, cache URLs/Referer headers, and sessions."
     }
 
     fn schema(&self) -> TableSchema {

@@ -937,7 +937,7 @@ impl TableProvider for VideoCarveTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Carve cached video streams & manifests (MP4/M4S, WebM, MPEG-TS, HLS .m3u8, DASH .mpd) with 3-pass segment reassembly (VideoCacheView equivalent)."
+        "Carve cached video streams & manifests (MP4/M4S, WebM, MPEG-TS, HLS .m3u8, DASH .mpd) with 3-pass segment reassembly."
     }
 
     fn schema(&self) -> TableSchema {

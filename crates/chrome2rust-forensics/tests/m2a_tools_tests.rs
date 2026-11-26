@@ -9,7 +9,7 @@ use crc32fast::Hasher;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use guap_export::{ExportFormat, ExportOptions, export_table, write_table_export};
-use guap_table::{CellValue, GetNirQuery, TableQuery};
+use guap_table::{CellValue, GuapQuery, TableQuery};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -387,7 +387,7 @@ fn test_all_21_table_providers_r4_compliance_and_exports() {
     let unified_hist = build_browser_tool_provider_by_id("chrome2rust_unified_history", Some(root)).unwrap();
     let hist_data = unified_hist.query(&TableQuery::default()).unwrap();
     assert!(hist_data.total_rows >= 5);
-    let q = GetNirQuery {
+    let q = GuapQuery {
         filter_expr: Some("browser = 'Mozilla Firefox'".to_string()),
         ..Default::default()
     };

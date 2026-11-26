@@ -452,7 +452,7 @@ impl TableProvider for SafariCacheTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Apple Safari Cache.db & fsCachedData entries (SafariCacheView equivalent)."
+        "Inspect Apple Safari Cache.db & fsCachedData entries."
     }
 
     fn schema(&self) -> TableSchema {

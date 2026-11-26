@@ -19,7 +19,7 @@ use chrome2rust_forensics::unified::{
 use chrome2rust_forensics::{AnalysisOptions, analyze_user_data};
 use chrome2rust_report::{ReportFormat, write_report};
 use guap_mcp::{ActionCommand, ActionRiskLevel, McpServerRegistry, McpToolError, PolicyMode};
-use guap_table::{FilterExpr, GetNirQuery, SortDirection, TableData, TableProvider, TableQuery, TableSchema};
+use guap_table::{FilterExpr, GuapQuery, SortDirection, TableData, TableProvider, TableQuery, TableSchema};
 use serde_json::{Map, Value, json};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -80,7 +80,7 @@ impl ActionCommand for BrowserTableAction {
         props.insert(
             "filter".to_string(),
             json!({
-                "description": "Filter expression string (GetNir syntax) or structured FilterExpr object"
+                "description": "Filter expression string (tabular query syntax) or structured FilterExpr object"
             }),
         );
         props.insert(
@@ -279,7 +279,7 @@ fn parse_mcp_table_query(schema: &TableSchema, args: &Value) -> Result<TableQuer
     let filter = match obj.get("filter") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) if s.trim().is_empty() => None,
-        Some(Value::String(s)) => Some(GetNirQuery::parse_filter(s)?),
+        Some(Value::String(s)) => Some(GuapQuery::parse_filter(s)?),
         Some(other) => {
             let expr: FilterExpr = serde_json::from_value(other.clone())
                 .map_err(|e| McpToolError::InvalidParams(format!("invalid filter object: {e}")))?;
@@ -290,7 +290,7 @@ fn parse_mcp_table_query(schema: &TableSchema, args: &Value) -> Result<TableQuer
     let sort = match obj.get("sort") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::String(spec)) => {
-            let parsed = GetNirQuery::parse_sort(spec)?;
+            let parsed = GuapQuery::parse_sort(spec)?;
             let mut resolved = Vec::with_capacity(parsed.len());
             for (col, dir) in parsed {
                 let idx = schema

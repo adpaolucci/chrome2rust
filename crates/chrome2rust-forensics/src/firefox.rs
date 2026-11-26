@@ -171,7 +171,7 @@ impl TableProvider for FirefoxHistoryTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Mozilla Firefox browsing history from places.sqlite (MZHistoryView equivalent)."
+        "Inspect Mozilla Firefox browsing history from places.sqlite."
     }
 
     fn schema(&self) -> TableSchema {
@@ -328,7 +328,7 @@ impl TableProvider for FirefoxCookiesTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Mozilla Firefox cookies.sqlite metadata only (host, name, path, flags, expiry; cookie values omitted) (MZCookiesView equivalent)."
+        "Inspect Mozilla Firefox cookies.sqlite metadata only (host, name, path, flags, expiry; cookie values omitted)."
     }
 
     fn schema(&self) -> TableSchema {

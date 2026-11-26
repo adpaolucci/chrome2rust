@@ -13,7 +13,7 @@ use chrome2rust_report::table_export::{
 };
 use clap::{Args, Subcommand};
 use guap_export::ExportFormat;
-use guap_table::{FilterExpr, GetNirQuery, SortDirection, TableData, TableProvider, TableQuery};
+use guap_table::{FilterExpr, GuapQuery, SortDirection, TableData, TableProvider, TableQuery};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ pub struct TableToolArgs {
     #[arg(value_name = "PATH")]
     pub path: Option<PathBuf>,
 
-    /// Filter expression (GetNir syntax e.g. `url contains 'example'` or plain substring)
+    /// Filter expression (tabular query syntax e.g. `url contains 'example'` or plain substring)
     #[arg(long)]
     pub filter: Option<String>,
 
@@ -114,11 +114,11 @@ pub struct CarveVideoArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum FxSubcommand {
-    /// Inspect Mozilla Firefox cache2/entries (MZCacheView equivalent)
+    /// Inspect Mozilla Firefox cache2/entries
     Cache(TableToolArgs),
-    /// Inspect Mozilla Firefox browsing history from places.sqlite (MZHistoryView equivalent)
+    /// Inspect Mozilla Firefox browsing history from places.sqlite
     History(TableToolArgs),
-    /// Inspect Mozilla Firefox cookies.sqlite metadata only (values omitted) (MZCookiesView equivalent)
+    /// Inspect Mozilla Firefox cookies.sqlite metadata only (values omitted)
     Cookies(TableToolArgs),
     /// Inspect Mozilla Firefox bookmarks from places.sqlite & bookmarkbackups/*.jsonlz4
     Bookmarks(TableToolArgs),
@@ -134,7 +134,7 @@ pub enum FxSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum OperaSubcommand {
-    /// Inspect Opera Blink & Presto (dcache4.url) HTTP caches (OperaCacheView equivalent)
+    /// Inspect Opera Blink & Presto (dcache4.url) HTTP caches
     Cache(TableToolArgs),
     /// Inspect Opera Blink History SQLite & Presto global_history.dat / opera6.adr
     History(TableToolArgs),
@@ -142,9 +142,9 @@ pub enum OperaSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum SafariSubcommand {
-    /// Inspect Apple Safari Cache.db & fsCachedData (SafariCacheView equivalent)
+    /// Inspect Apple Safari Cache.db & fsCachedData
     Cache(TableToolArgs),
-    /// Inspect Apple Safari History.db & History.plist (SafariHistoryView equivalent)
+    /// Inspect Apple Safari History.db & History.plist
     History(TableToolArgs),
     /// Inspect Apple Safari Bookmarks.plist recursively (bplist00 or XML plist)
     Bookmarks(TableToolArgs),
@@ -152,13 +152,13 @@ pub enum SafariSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum UnifiedSubcommand {
-    /// Aggregate normalized browsing history across Chrome, Edge, Brave, Opera, Firefox & Safari (BrowsingHistoryView)
+    /// Aggregate normalized browsing history across Chrome, Edge, Brave, Opera, Firefox & Safari
     History(UnifiedTableToolArgs),
-    /// Aggregate normalized download histories across browsers (BrowserDownloadsView)
+    /// Aggregate normalized download histories across browsers
     Downloads(UnifiedTableToolArgs),
-    /// Aggregate normalized extensions/add-ons & risk flags across browsers (BrowserAddonsView)
+    /// Aggregate normalized extensions/add-ons & risk flags across browsers
     Addons(UnifiedTableToolArgs),
-    /// Aggregate normalized bookmarks across browsers (WebBrowserBookmarksView)
+    /// Aggregate normalized bookmarks across browsers
     Bookmarks(UnifiedTableToolArgs),
     /// Aggregate non-credential form autofill across Web Data (autofill only) & Firefox formhistory.sqlite
     Autofill(UnifiedTableToolArgs),
@@ -166,9 +166,9 @@ pub enum UnifiedSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum CarveSubcommand {
-    /// Carve cached images with magic-byte validation, dimensions & pure-Rust TIFF/EXIF + GPS metadata (ImageCacheViewer)
+    /// Carve cached images with magic-byte validation, dimensions & pure-Rust TIFF/EXIF + GPS metadata
     Images(CarveImagesArgs),
-    /// Carve cached videos (MP4/M4S, WebM, MPEG-TS, HLS .m3u8, DASH .mpd) & 3-pass segment reassembly (VideoCacheView)
+    /// Carve cached videos (MP4/M4S, WebM, MPEG-TS, HLS .m3u8, DASH .mpd) & 3-pass segment reassembly
     Video(CarveVideoArgs),
 }
 
@@ -300,7 +300,7 @@ pub fn run_carve(action: CarveSubcommand, audit_manifest: Option<&Path>) -> Resu
 fn build_table_query(provider: &dyn TableProvider, args: &TableToolArgs) -> Result<TableQuery> {
     let schema = provider.schema();
     let filter = match &args.filter {
-        Some(f) if !f.trim().is_empty() => match GetNirQuery::parse_filter(f) {
+        Some(f) if !f.trim().is_empty() => match GuapQuery::parse_filter(f) {
             Ok(expr) => Some(expr),
             Err(_) => Some(FilterExpr::Contains {
                 column: None,
@@ -313,7 +313,7 @@ fn build_table_query(provider: &dyn TableProvider, args: &TableToolArgs) -> Resu
 
     let sort = match &args.sort {
         Some(spec) if !spec.trim().is_empty() => {
-            let parsed = GetNirQuery::parse_sort(spec).map_err(|e| anyhow!(e.to_string()))?;
+            let parsed = GuapQuery::parse_sort(spec).map_err(|e| anyhow!(e.to_string()))?;
             let mut resolved = Vec::with_capacity(parsed.len());
             for (col, mut dir) in parsed {
                 let idx = schema

@@ -158,7 +158,7 @@ impl TableProvider for SafariHistoryTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Apple Safari browsing history from History.db (CFAbsoluteTime) and History.plist (SafariHistoryView equivalent)."
+        "Inspect Apple Safari browsing history from History.db (CFAbsoluteTime) and History.plist."
     }
 
     fn schema(&self) -> TableSchema {

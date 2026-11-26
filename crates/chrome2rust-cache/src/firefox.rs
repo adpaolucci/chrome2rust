@@ -393,7 +393,7 @@ impl TableProvider for FirefoxCacheTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Mozilla Firefox cache2/entries metadata, HTTP headers, timestamps, and payloads (MZCacheView equivalent)."
+        "Inspect Mozilla Firefox cache2/entries metadata, HTTP headers, timestamps, and payloads."
     }
 
     fn schema(&self) -> TableSchema {

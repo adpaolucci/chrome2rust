@@ -408,7 +408,7 @@ impl TableProvider for OperaCacheTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Inspect Opera Blink (Stable/GX) and Opera Presto (dcache4.url) HTTP cache entries (OperaCacheView equivalent)."
+        "Inspect Opera Blink (Stable/GX) and Opera Presto (dcache4.url) HTTP cache entries."
     }
 
     fn schema(&self) -> TableSchema {

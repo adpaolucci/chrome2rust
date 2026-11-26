@@ -131,7 +131,7 @@ pub enum Commands {
         action: tools_cmd::UnifiedSubcommand,
     },
 
-    /// Extract search engine queries from history, cache URLs/Referer headers, and sessions (MyLastSearch equivalent)
+    /// Extract search engine queries from history, cache URLs/Referer headers, and sessions
     SearchQueries(tools_cmd::SearchQueriesArgs),
 
     /// Carve cached images (with EXIF/GPS) and video streams (MP4/WebM/TS/HLS/DASH) across browsers

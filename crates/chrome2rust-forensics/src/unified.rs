@@ -78,7 +78,7 @@ fn is_chromium_like(kind: UnifiedBrowserKind) -> bool {
 }
 
 // =========================================================================
-// 1. unified history (BrowsingHistoryView)
+// 1. unified history
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,7 +228,7 @@ impl TableProvider for UnifiedHistoryTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Aggregate normalized browsing history across Chrome, Edge, Brave, Opera, Firefox, and Safari (BrowsingHistoryView equivalent)."
+        "Aggregate normalized browsing history across Chrome, Edge, Brave, Opera, Firefox, and Safari."
     }
 
     fn schema(&self) -> TableSchema {
@@ -280,7 +280,7 @@ impl TableProvider for UnifiedHistoryTableProvider {
 }
 
 // =========================================================================
-// 2. unified downloads (BrowserDownloadsView)
+// 2. unified downloads
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -438,7 +438,7 @@ impl TableProvider for UnifiedDownloadsTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Aggregate normalized download histories across Chrome, Edge, Brave, Opera, Firefox, and Safari (BrowserDownloadsView equivalent)."
+        "Aggregate normalized download histories across Chrome, Edge, Brave, Opera, Firefox, and Safari."
     }
 
     fn schema(&self) -> TableSchema {
@@ -494,7 +494,7 @@ impl TableProvider for UnifiedDownloadsTableProvider {
 }
 
 // =========================================================================
-// 3. unified addons (BrowserAddonsView)
+// 3. unified addons
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -600,7 +600,7 @@ impl TableProvider for UnifiedAddonsTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Aggregate normalized browser extensions and add-ons with permission risk flags across Chromium and Firefox (BrowserAddonsView equivalent)."
+        "Aggregate normalized browser extensions and add-ons with permission risk flags across Chromium and Firefox."
     }
 
     fn schema(&self) -> TableSchema {
@@ -654,7 +654,7 @@ impl TableProvider for UnifiedAddonsTableProvider {
 }
 
 // =========================================================================
-// 4. unified bookmarks (WebBrowserBookmarksView)
+// 4. unified bookmarks
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -778,7 +778,7 @@ impl TableProvider for UnifiedBookmarksTableProvider {
     }
 
     fn description(&self) -> &'static str {
-        "Aggregate normalized bookmarks across Chrome, Edge, Brave, Opera, Firefox, and Safari (WebBrowserBookmarksView equivalent)."
+        "Aggregate normalized bookmarks across Chrome, Edge, Brave, Opera, Firefox, and Safari."
     }
 
     fn schema(&self) -> TableSchema {

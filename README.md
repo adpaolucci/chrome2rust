@@ -20,7 +20,7 @@ Ready-to-submit **WinGet** & **Homebrew** manifests live in [`packaging/`](packa
 
 ## Architectural Comparison: `chrome2rust` vs. Legacy Forensic Tools
 
-| Capability / Metric | `chrome2rust` (Pure Rust 1.88+) | `ChromeCacheView` (NirSoft) | `Hindsight` (Python / Obsidian) |
+| Capability / Metric | `chrome2rust` (Pure Rust 1.88+) | Legacy Desktop Cache Viewers | `Hindsight` (Python / Obsidian) |
 | :--- | :--- | :--- | :--- |
 | **Cache Backends** | **Simple Cache (`*_0`/`*_1`) + Blockfile (`data_0..3`, `f_xxxxxx`)** | Partial Blockfile / legacy Simple | Simple Cache & Blockfile |
 | **Transparent Decompression** | **Pure-Rust `gzip`, `deflate`, `br` (Brotli), `zstd` (Zstandard)** | External/OS decompression | Python `brotli`/`zstandard` dependencies |
@@ -105,7 +105,7 @@ Automatically locates installed profiles across **Google Chrome**, **Chromium**,
 - **`Cookies` & `Login Data`**: Encryption scheme breakdown (`plaintext`, `v10`, `v11`, `v20` App-Bound, `dpapi`), optional best-effort decryption, and `insecure_credentials` flagging.
 - **`Web Data`, `Preferences`, `Bookmarks`, `Extensions`**: Autofill history, addresses, card metadata, hierarchical bookmarks, permission extraction, and sideloaded/over-privileged extension risk flags.
 - **`Sessions` & Site Storage**: SNSS (`Session_*` / `Tabs_*`) open & closed tab navigation stacks, pure-Rust `LevelDB` `.ldb` (Snappy/Zstd) + `.log` WAL replay for `Local Storage` and `Session Storage`, `IndexedDB` origin inventory, `Top Sites`, and `Reporting and NEL`.
-- **Multi-Browser & Media Extensions (`guap-kit` Powered)**: Cross-browser support for **Firefox** (`cache2`, `places.sqlite`, cookie metadata, `mozlz4` bookmark backups/sessions, `formhistory.sqlite`, `addons`), **Opera** (Blink & Presto `dcache4.url`), **Safari** (`Cache.db`, `History.db`, `Bookmarks.plist` binary/XML), **Unified Multi-Browser Aggregators** (`BrowsingHistoryView`, `BrowserDownloadsView`, `BrowserAddonsView`, `WebBrowserBookmarksView`, `unified autofill`, `MyLastSearch`), and **Media Carving** (`ImageCacheViewer` EXIF/GPS & `VideoCacheView` MP4/M4S/WebM/HLS/DASH), all integrated with `guap-table` and `guap-export` CSV/Merkle custody.
+- **Multi-Browser & Media Extensions (`guap-kit` Powered)**: Cross-browser support for **Firefox** (`cache2`, `places.sqlite`, cookie metadata, `mozlz4` bookmark backups/sessions, `formhistory.sqlite`, `addons`), **Opera** (Blink & Presto `dcache4.url`), **Safari** (`Cache.db`, `History.db`, `Bookmarks.plist` binary/XML), **Unified Multi-Browser Aggregators** (browsing history, downloads, add-ons, bookmarks, autofill, and search-query extraction), and **Media Carving** (cached image EXIF/GPS carving & video MP4/M4S/WebM/HLS/DASH stream reassembly), all integrated with `guap-table` and `guap-export` CSV/Merkle custody.
 
 ---
 
