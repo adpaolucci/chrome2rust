@@ -8,7 +8,7 @@ Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentatio
 [![Forensics: Read-Only](https://img.shields.io/badge/Forensics-Read--Only%20Snapshots-success.svg)](crates/chrome2rust-forensics)
 [![Architecture: 8 Crates](https://img.shields.io/badge/Workspace-8%20Crates-emerald.svg)](Cargo.toml)
 [![GUI: WinSafe Win32 + Iced 0.14](https://img.shields.io/badge/GUI-WinSafe%20Win32%20%2B%20Iced%200.14-cyan.svg)](crates/chrome2rust-win32)
-[![MCP: stdio JSON-RPC](https://img.shields.io/badge/MCP-stdio%20JSON--RPC%202.0-purple.svg)](crates/chrome2rust-mcp)
+[![MCP: stdio JSON-RPC](https://img.shields.io/badge/MCP-stdio%20JSON--RPC%202.0%20(29%20Tools)-purple.svg)](crates/chrome2rust-mcp)
 
 Ready-to-submit **WinGet** & **Homebrew** manifests live in [`packaging/`](packaging/README.md).
 
@@ -27,7 +27,7 @@ Ready-to-submit **WinGet** & **Homebrew** manifests live in [`packaging/`](packa
 | **Pickled HTTP Headers** | **Full `HttpResponseInfo`, TLS version, ALPN, X.509 cert chains** | Basic HTTP headers only | Raw headers; limited cert chain extraction |
 | **Payload Magic Carving** | **60+ binary signatures with `Content-Type` mismatch detection** | Extension guessing from URL query | Basic MIME classification |
 | **Locked Profile Snapshots** | **Non-destructive atomic WAL/SHM copying (zero mutation)** | Fails on locked files or locks DB | Copy without active WAL merge |
-| **AI Agent Integration** | **Native `stdio` Model Context Protocol (MCP) server (8 tools)** | None | None |
+| **AI Agent Integration** | **Native `stdio` Model Context Protocol (MCP) server (29 tools)** | None | None |
 | **Desktop GUI Console** | **Dual Pure-Rust GUIs: Native Win32 (`winsafe`) + Cross-Platform Iced `0.14` (`tiny-skia` fallback)** | Classic Win32 MFC (Windows-only) | Local web server in default browser |
 | **Throughput & Footprint** | **> 50,000 entries/sec • < 25 MB static RAM** | Fast, but Windows-only | 100–500 MB RAM (Python GC overhead) |
 | **Chain of Custody** | **RFC 6234 Balanced Binary Merkle Tree Root Hash** | Basic file hash list | Custom SQLite export log |
@@ -105,6 +105,7 @@ Automatically locates installed profiles across **Google Chrome**, **Chromium**,
 - **`Cookies` & `Login Data`**: Encryption scheme breakdown (`plaintext`, `v10`, `v11`, `v20` App-Bound, `dpapi`), optional best-effort decryption, and `insecure_credentials` flagging.
 - **`Web Data`, `Preferences`, `Bookmarks`, `Extensions`**: Autofill history, addresses, card metadata, hierarchical bookmarks, permission extraction, and sideloaded/over-privileged extension risk flags.
 - **`Sessions` & Site Storage**: SNSS (`Session_*` / `Tabs_*`) open & closed tab navigation stacks, pure-Rust `LevelDB` `.ldb` (Snappy/Zstd) + `.log` WAL replay for `Local Storage` and `Session Storage`, `IndexedDB` origin inventory, `Top Sites`, and `Reporting and NEL`.
+- **Multi-Browser & Media Extensions (`guap-kit` Powered)**: Cross-browser support for **Firefox** (`cache2`, `places.sqlite`, cookie metadata, `mozlz4` bookmark backups/sessions, `formhistory.sqlite`, `addons`), **Opera** (Blink & Presto `dcache4.url`), **Safari** (`Cache.db`, `History.db`, `Bookmarks.plist` binary/XML), **Unified Multi-Browser Aggregators** (`BrowsingHistoryView`, `BrowserDownloadsView`, `BrowserAddonsView`, `WebBrowserBookmarksView`, `unified autofill`, `MyLastSearch`), and **Media Carving** (`ImageCacheViewer` EXIF/GPS & `VideoCacheView` MP4/M4S/WebM/HLS/DASH), all integrated with `guap-table` and `guap-export` CSV/Merkle custody.
 
 ---
 
@@ -213,21 +214,34 @@ chrome2rust --pick analyze --json
 chrome2rust --log-level debug --log-file ./chrome2rust.log analyze "/path/to/User Data"
 ```
 
+### 6. Multi-Browser (`fx`, `opera`, `safari`, `unified`, `search-queries`) & Media Carving (`carve`)
+```bash
+# Firefox, Opera & Safari read-only inspection (pure-Rust mozlz4, bplist, cache2 & SQLite)
+chrome2rust fx history "/path/to/places.sqlite" -f json
+chrome2rust fx sessions "/path/to/sessionstore.jsonlz4" -f json
+chrome2rust opera cache "/path/to/dcache4.url" -f json
+chrome2rust safari bookmarks "/path/to/Bookmarks.plist" -f json
+
+# Cross-browser unified views, search query extraction & media/EXIF/video carving
+chrome2rust unified history "/path/to/places.sqlite" -f csv -o ./unified.csv --custody-manifest ./custody.json
+chrome2rust search-queries "/path/to/places.sqlite" -f json
+chrome2rust carve images "/path/to/sample_exif.jpg" -f json
+chrome2rust carve video "/path/to/sample_fmp4.mp4" -f json
+```
+
 ---
 
 ## Model Context Protocol (MCP) for AI Agents
 
-`chrome2rust` includes a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) JSON-RPC 2.0 server (`chrome2rust mcp` or the standalone `chrome2rust-mcp` binary). All diagnostic logs stream to `stderr` so `stdout` carries clean JSON-RPC envelopes.
+`chrome2rust` includes a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) JSON-RPC 2.0 server (`chrome2rust mcp` or the standalone `chrome2rust-mcp` binary) exposing **29 read-only forensic tools** (`8` core Chromium tools + `21` multi-browser, search-query, and media-carving `TableProvider`s). All diagnostic logs stream to `stderr` so `stdout` carries clean JSON-RPC envelopes.
 
-Available tools:
-- **`chrome2rust_profiles`**: Discover local Chromium browsers, profiles, and cache folders.
-- **`chrome2rust_sniff`**: Classify files or directories by magic signature and Chrome artifact type.
-- **`chrome2rust_cache_list`**: Filter and enumerate HTTP cache entries as structured JSON.
-- **`chrome2rust_cache_inspect`**: Retrieve full HTTP response headers, TLS/ALPN state, X.509 certificates, SHA-256 digest, and UTF-8 preview.
-- **`chrome2rust_cache_extract`**: Decompress and export cached resources to an output folder.
-- **`chrome2rust_analyze`**: Execute complete read-only `User Data` forensic analysis.
-- **`chrome2rust_report`**: Generate offline HTML, JSON, Markdown, or bundled forensic reports.
-- **`chrome2rust_custody`**: Compute deterministic SHA-256 digests and balanced RFC 6234 Merkle root manifests.
+Core Chromium tools:
+- **`chrome2rust_profiles`**, **`chrome2rust_sniff`**, **`chrome2rust_cache_list`**, **`chrome2rust_cache_inspect`**, **`chrome2rust_cache_extract`**, **`chrome2rust_analyze`**, **`chrome2rust_report`**, **`chrome2rust_custody`**
+
+Multi-browser & media carving tools (all `readOnlyHint: true`, `destructiveHint: false`):
+- **Firefox**: `chrome2rust_fx_cache`, `chrome2rust_fx_history`, `chrome2rust_fx_cookies`, `chrome2rust_fx_bookmarks`, `chrome2rust_fx_downloads`, `chrome2rust_fx_formhistory`, `chrome2rust_fx_addons`, `chrome2rust_fx_sessions`
+- **Opera & Safari**: `chrome2rust_opera_cache`, `chrome2rust_opera_history`, `chrome2rust_safari_cache`, `chrome2rust_safari_history`, `chrome2rust_safari_bookmarks`
+- **Unified & Media**: `chrome2rust_unified_history`, `chrome2rust_unified_downloads`, `chrome2rust_unified_addons`, `chrome2rust_unified_bookmarks`, `chrome2rust_unified_autofill`, `chrome2rust_search_queries`, `chrome2rust_carve_images`, `chrome2rust_carve_video`
 
 Inspect schemas or start the stdio server:
 ```bash
@@ -258,6 +272,7 @@ Client configuration ([`mcp.json`](mcp.json)):
 - [SECURITY.md](SECURITY.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [CHANGELOG.md](CHANGELOG.md)
+- [**Project Wiki**](https://github.com/adpaolucci/chrome2rust/wiki) ([Multi-Browser & Media Carving](https://github.com/adpaolucci/chrome2rust/wiki/Multi-Browser-and-Media-Carving), [CLI Reference](https://github.com/adpaolucci/chrome2rust/wiki/CLI-Reference), [MCP Server Guide](https://github.com/adpaolucci/chrome2rust/wiki/MCP-Server-Guide))
 
 ---
 
