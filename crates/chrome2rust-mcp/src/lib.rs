@@ -419,6 +419,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_profiles",
             "description": "Discover local Chromium-family browsers, User Data directories, profiles, and HTTP caches.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {}
@@ -427,6 +428,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_sniff",
             "description": "Inspect file magic headers, container structures, missing/mismatched extensions, or directory layout to identify Chrome artifacts and cached payloads.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -438,6 +440,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_cache_list",
             "description": "Scan Simple Cache / Blockfile entries matching filters and return structured JSON metadata.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -455,6 +458,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_cache_inspect",
             "description": "Inspect headers, TLS/ALPN info, X.509 certificates, SHA-256 digest, and optional UTF-8 payload preview of a cached resource.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -468,6 +472,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_cache_extract",
             "description": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -484,6 +489,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_analyze",
             "description": "Run comprehensive read-only forensic analysis across Chrome User Data artifacts (history, downloads, cookies, logins, extensions, sessions, storage, findings, timeline).",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -497,6 +503,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_report",
             "description": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -511,6 +518,7 @@ pub fn get_legacy_tools_manifest() -> Value {
         {
             "name": "chrome2rust_custody",
             "description": "Compute deterministic SHA-256 hashes and balanced Merkle root over artifacts in a Chrome User Data directory.",
+            "annotations": { "readOnlyHint": true, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -774,10 +782,49 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
             }
         })),
         "tools/call" => {
-            let params = &req["params"];
-            let tool_name = params["name"].as_str().unwrap_or("");
+            let Some(params) = req.get("params").and_then(Value::as_object) else {
+                return id.map(|req_id| {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: params must be a JSON object"
+                        }
+                    })
+                });
+            };
+            let Some(tool_name) = params.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+                return id.map(|req_id| {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: missing tool 'name'"
+                        }
+                    })
+                });
+            };
             if LEGACY_TOOL_NAMES.contains(&tool_name) {
-                let args = &params["arguments"];
+                let raw_args = params.get("arguments");
+                if let Some(a) = raw_args
+                    && !a.is_object()
+                    && !a.is_null()
+                {
+                    return id.map(|req_id| {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: arguments must be a JSON object"
+                            }
+                        })
+                    });
+                }
+                let default_args = json!({});
+                let args = raw_args.unwrap_or(&default_args);
                 let (text, is_err) = match call_tool(tool_name, args) {
                     Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_default(), false),
                     Err(msg) => (msg, true),
@@ -959,15 +1006,40 @@ mod tests {
         assert_eq!(arr.len(), 29);
         assert!(!arr.iter().any(|t| t["name"] == "chrome2rust_cache_delete"));
 
+        for t in arr {
+            assert_eq!(t["annotations"]["readOnlyHint"], true);
+            assert_eq!(t["annotations"]["destructiveHint"], false);
+        }
+
+        let bad_args = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 90,
+            "method": "tools/call",
+            "params": {
+                "name": "chrome2rust_profiles",
+                "arguments": "not_object"
+            }
+        }))
+        .unwrap();
+        assert_eq!(bad_args["error"]["code"], -32602);
+
+        let unknown_tool = handle_jsonrpc_request(&json!({
+            "jsonrpc": "2.0",
+            "id": 91,
+            "method": "tools/call",
+            "params": {
+                "name": "__nonexistent_chrome_tool",
+                "arguments": {}
+            }
+        }))
+        .unwrap();
+        assert_eq!(unknown_tool["error"]["code"], -32601);
+
         let new_tools: Vec<_> = arr
             .iter()
             .filter(|t| !LEGACY_TOOL_NAMES.contains(&t["name"].as_str().unwrap_or("")))
             .collect();
         assert_eq!(new_tools.len(), 21);
-        for t in new_tools {
-            assert_eq!(t["annotations"]["readOnlyHint"], true);
-            assert_eq!(t["annotations"]["destructiveHint"], false);
-        }
 
         // Test JSON-RPC initialize + tools/list + tools/call on new ReadOnly tools
         let init_resp = handle_jsonrpc_request(&json!({
