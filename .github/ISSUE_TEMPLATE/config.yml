@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Project Hub & Web Documentation
-    url: https://chrome2rust.guap.ca
+    url: https://guap.ca/chrome2rust/
     about: Browse architecture docs, CLI examples, cache backends, and MCP setup guides.
   - name: Security Vulnerability Reporting
     url: https://github.com/adpaolucci/chrome2rust/security/advisories/new

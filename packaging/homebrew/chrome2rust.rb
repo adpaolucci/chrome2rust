@@ -1,6 +1,6 @@
 class Chrome2rust < Formula
   desc "Pure-Rust Iced GUI, CLI, and MCP server for Chrome cache inspection and User Data forensics"
-  homepage "https://chrome2rust.guap.ca"
+  homepage "https://guap.ca/chrome2rust/"
   version "0.2.2"
   license "Apache-2.0"
 

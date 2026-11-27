@@ -7,7 +7,7 @@ Publisher: adpaolucci
 PublisherUrl: https://github.com/adpaolucci
 PublisherSupportUrl: https://github.com/adpaolucci/chrome2rust/issues
 PackageName: Chrome2Rust
-PackageUrl: https://chrome2rust.guap.ca
+PackageUrl: https://guap.ca/chrome2rust/
 License: Apache-2.0
 LicenseUrl: https://github.com/adpaolucci/chrome2rust/blob/main/LICENSE
 Copyright: Copyright (c) 2026 adpaolucci
@@ -30,6 +30,6 @@ Tags:
 ReleaseNotesUrl: https://github.com/adpaolucci/chrome2rust/releases/tag/v0.2.2
 Documentations:
   - DocumentLabel: Project Hub & Documentation
-    DocumentUrl: https://chrome2rust.guap.ca
+    DocumentUrl: https://guap.ca/chrome2rust/
 ManifestType: defaultLocale
 ManifestVersion: 1.9.0

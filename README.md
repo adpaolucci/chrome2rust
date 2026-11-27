@@ -1,6 +1,6 @@
 # `chrome2rust` — High-Fidelity Google Chrome Cache Inspector & User Data Forensic Suite in Pure Rust
 
-Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentation: https://chrome2rust.guap.ca**](https://chrome2rust.guap.ca) • [**Project Wiki**](https://github.com/adpaolucci/chrome2rust/wiki)
+Part of the **GUAP** Ecosystem (`guap.ca`) • [**Project Hub & Web Documentation: https://guap.ca/chrome2rust/**](https://guap.ca/chrome2rust/) • [**Project Wiki**](https://github.com/adpaolucci/chrome2rust/wiki)
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/adpaolucci/chrome2rust/actions/workflows/ci.yml/badge.svg)](https://github.com/adpaolucci/chrome2rust/actions/workflows/ci.yml)
