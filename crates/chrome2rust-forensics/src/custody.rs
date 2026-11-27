@@ -58,13 +58,22 @@ fn sha256_file(path: &Path) -> Result<(String, u64), std::io::Error> {
         hasher.update(&buf[..n]);
         total += n as u64;
     }
-    Ok((format!("{:x}", hasher.finalize()), total))
+    Ok((hex_lower(&hasher.finalize()), total))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
 }
 
 /// Computes a balanced binary SHA-256 Merkle root over ordered artifact leaf hashes (RFC 6234).
 pub fn compute_merkle_root(hex_hashes: &[String]) -> String {
     if hex_hashes.is_empty() {
-        return format!("{:x}", Sha256::digest(b""));
+        return hex_lower(&Sha256::digest(b""));
     }
     let mut layer: Vec<Vec<u8>> = hex_hashes
         .iter()

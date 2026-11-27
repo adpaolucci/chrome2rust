@@ -1,4 +1,4 @@
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use hmac::Hmac;
 use pbkdf2::pbkdf2;
@@ -168,7 +168,7 @@ fn try_aes_128_cbc_chrome(ciphertext: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     let iv = [0x20u8; 16];
     let mut buf = ciphertext.to_vec();
     let dec = Aes128CbcDec::new_from_slices(key, &iv).ok()?;
-    let pt = dec.decrypt_padded_mut::<Pkcs7>(&mut buf).ok()?;
+    let pt = dec.decrypt_padded::<Pkcs7>(&mut buf).ok()?;
     Some(pt.to_vec())
 }
 
@@ -178,8 +178,8 @@ fn try_aes_256_gcm_chrome(payload: &[u8], key: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-    let nonce = Nonce::from_slice(&payload[..12]);
-    cipher.decrypt(nonce, &payload[12..]).ok()
+    let nonce = Nonce::try_from(&payload[..12]).ok()?;
+    cipher.decrypt(&nonce, &payload[12..]).ok()
 }
 
 fn extract_utf8_plaintext(pt: &[u8], domain_hint: Option<&str>, db_version: Option<i64>) -> Option<String> {
@@ -236,7 +236,7 @@ fn decode_hex_if_exact(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes::cipher::{BlockEncryptMut, block_padding::Pkcs7};
+    use aes::cipher::{BlockModeEncrypt, block_padding::Pkcs7};
 
     #[test]
     fn test_linux_peanuts_v10_decrypt_with_v24_domain_hash() {
@@ -249,7 +249,7 @@ mod tests {
         let mut buf = vec![0u8; plaintext.len() + 16];
         buf[..plaintext.len()].copy_from_slice(&plaintext);
         let enc = Aes128CbcEnc::new_from_slices(&key, &iv).unwrap();
-        let ct = enc.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len()).unwrap();
+        let ct = enc.encrypt_padded::<Pkcs7>(&mut buf, plaintext.len()).unwrap();
 
         let mut blob = b"v10".to_vec();
         blob.extend_from_slice(ct);

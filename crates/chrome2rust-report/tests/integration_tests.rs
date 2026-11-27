@@ -1,4 +1,4 @@
-use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use chrome2rust_cache::export::{
     CacheColumn, ExportFormat, ExtractFilenameMode, ExtractOptions, extract_cache_entries, render_cache_export,
 };
@@ -147,7 +147,7 @@ fn build_synthetic_user_data(root: &std::path::Path) {
         buf[..pt.len()].copy_from_slice(&pt);
         let ct = Aes128CbcEnc::new_from_slices(&key, &iv)
             .unwrap()
-            .encrypt_padded_mut::<Pkcs7>(&mut buf, pt.len())
+            .encrypt_padded::<Pkcs7>(&mut buf, pt.len())
             .unwrap();
         let mut blob = b"v10".to_vec();
         blob.extend_from_slice(ct);
