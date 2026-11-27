@@ -1463,6 +1463,7 @@ pub fn discover_opera_profiles() -> Vec<UnifiedProfileTarget> {
 
 /// Discovers local Apple Safari data directories (macOS and legacy Windows).
 pub fn discover_safari_profiles() -> Vec<UnifiedProfileTarget> {
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(unused_mut))]
     let mut out = Vec::new();
 
     #[cfg(target_os = "macos")]
