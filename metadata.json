@@ -3,7 +3,7 @@
   "version": "0.2.2",
   "description": "100% pure-Rust native Win32 (WinSafe) & cross-platform Iced forensic workstation, HTTP cache inspector, CLI, and MCP server for Google Chrome.",
   "repository": "https://github.com/adpaolucci/chrome2rust",
-  "homepage": "https://chrome2rust.guap.ca",
+  "homepage": "https://guap.ca/chrome2rust/",
   "license": "Apache-2.0",
   "binaries": [
     "chrome2rust",
@@ -20,5 +20,153 @@
     "Cross-platform OS keyring decryption & SHA-256/512 Merkle chain of custody",
     "Native Win32 (WinSafe) & Iced 0.14 dual GUIs with guap-kit data grids",
     "29-tool read-only MCP JSON-RPC stdio server (8 legacy + 21 guap-mcp browser tools)"
+  ],
+  "mcp_tools_count": 29,
+  "tools": [
+    {
+      "id": "chrome2rust_profiles",
+      "readOnly": true,
+      "summary": "Discover local Chromium-family browsers, User Data directories, profiles, and HTTP caches."
+    },
+    {
+      "id": "chrome2rust_sniff",
+      "readOnly": true,
+      "summary": "Inspect file magic headers, container structures, missing/mismatched extensions, or directory layout to identify Chrome artifacts and cached payloads."
+    },
+    {
+      "id": "chrome2rust_cache_list",
+      "readOnly": true,
+      "summary": "Scan Simple Cache / Blockfile entries matching filters and return structured JSON metadata."
+    },
+    {
+      "id": "chrome2rust_cache_inspect",
+      "readOnly": true,
+      "summary": "Inspect headers, TLS/ALPN info, X.509 certificates, SHA-256 digest, and optional UTF-8 payload preview of a cached resource."
+    },
+    {
+      "id": "chrome2rust_cache_extract",
+      "readOnly": true,
+      "summary": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation."
+    },
+    {
+      "id": "chrome2rust_analyze",
+      "readOnly": true,
+      "summary": "Run comprehensive read-only forensic analysis across Chrome User Data artifacts (history, downloads, cookies, logins, extensions, sessions, storage, findings, timeline)."
+    },
+    {
+      "id": "chrome2rust_report",
+      "readOnly": true,
+      "summary": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory."
+    },
+    {
+      "id": "chrome2rust_custody",
+      "readOnly": true,
+      "summary": "Compute deterministic SHA-256 hashes and balanced Merkle root over artifacts in a Chrome User Data directory."
+    },
+    {
+      "id": "chrome2rust_carve_images",
+      "readOnly": true,
+      "summary": "Carve cached images across browsers with magic-byte validation, dimension extraction, and pure-Rust TIFF/EXIF IFD + GPS metadata."
+    },
+    {
+      "id": "chrome2rust_carve_video",
+      "readOnly": true,
+      "summary": "Carve cached video streams & manifests (MP4/M4S, WebM, MPEG-TS, HLS .m3u8, DASH .mpd) with 3-pass segment reassembly."
+    },
+    {
+      "id": "chrome2rust_fx_addons",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox installed add-ons, extensions, permissions, and risk flags from extensions.json/addons.json."
+    },
+    {
+      "id": "chrome2rust_fx_bookmarks",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox bookmarks from places.sqlite and bookmarkbackups/*.jsonlz4."
+    },
+    {
+      "id": "chrome2rust_fx_cache",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox cache2/entries metadata, HTTP headers, timestamps, and payloads."
+    },
+    {
+      "id": "chrome2rust_fx_cookies",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox cookies.sqlite metadata only (host, name, path, flags, expiry; cookie values omitted)."
+    },
+    {
+      "id": "chrome2rust_fx_downloads",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox download history from places.sqlite moz_annos."
+    },
+    {
+      "id": "chrome2rust_fx_formhistory",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox non-credential form autofill history from formhistory.sqlite."
+    },
+    {
+      "id": "chrome2rust_fx_history",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox browsing history from places.sqlite."
+    },
+    {
+      "id": "chrome2rust_fx_sessions",
+      "readOnly": true,
+      "summary": "Inspect Mozilla Firefox open and closed session tabs from sessionstore.jsonlz4 / recovery.jsonlz4."
+    },
+    {
+      "id": "chrome2rust_opera_cache",
+      "readOnly": true,
+      "summary": "Inspect Opera Blink (Stable/GX) and Opera Presto (dcache4.url) HTTP cache entries."
+    },
+    {
+      "id": "chrome2rust_opera_history",
+      "readOnly": true,
+      "summary": "Inspect Opera Blink (History SQLite) and Opera Presto (global_history.dat / opera6.adr) browsing history."
+    },
+    {
+      "id": "chrome2rust_safari_bookmarks",
+      "readOnly": true,
+      "summary": "Inspect Apple Safari bookmarks recursively from Bookmarks.plist (bplist00 or XML plist)."
+    },
+    {
+      "id": "chrome2rust_safari_cache",
+      "readOnly": true,
+      "summary": "Inspect Apple Safari Cache.db & fsCachedData entries."
+    },
+    {
+      "id": "chrome2rust_safari_history",
+      "readOnly": true,
+      "summary": "Inspect Apple Safari browsing history from History.db (CFAbsoluteTime) and History.plist."
+    },
+    {
+      "id": "chrome2rust_search_queries",
+      "readOnly": true,
+      "summary": "Extract search engine queries (Google, Bing, DuckDuckGo, Yahoo, Yandex, Baidu, YouTube, Brave, Startpage, Ecosia) from history, cache URLs/Referer headers, and sessions."
+    },
+    {
+      "id": "chrome2rust_unified_addons",
+      "readOnly": true,
+      "summary": "Aggregate normalized browser extensions and add-ons with permission risk flags across Chromium and Firefox."
+    },
+    {
+      "id": "chrome2rust_unified_autofill",
+      "readOnly": true,
+      "summary": "Aggregate non-credential form autofill history from Chrome Web Data (autofill table only) and Firefox formhistory.sqlite."
+    },
+    {
+      "id": "chrome2rust_unified_bookmarks",
+      "readOnly": true,
+      "summary": "Aggregate normalized bookmarks across Chrome, Edge, Brave, Opera, Firefox, and Safari."
+    },
+    {
+      "id": "chrome2rust_unified_downloads",
+      "readOnly": true,
+      "summary": "Aggregate normalized download histories across Chrome, Edge, Brave, Opera, Firefox, and Safari."
+    },
+    {
+      "id": "chrome2rust_unified_history",
+      "readOnly": true,
+      "summary": "Aggregate normalized browsing history across Chrome, Edge, Brave, Opera, Firefox, and Safari."
+    }
   ]
 }
