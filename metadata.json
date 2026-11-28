@@ -19,7 +19,7 @@
     "Unified history/downloads/addons/bookmarks/autofill, search query extraction, and image EXIF + video stream carving",
     "Offline forensic blob decryption (user-supplied keys / Linux fallback; DPAPI/OS keyring classification-only) & SHA-256/512 Merkle chain of custody",
     "Native Win32 (WinSafe) & Iced 0.14 dual GUIs with guap-kit data grids",
-    "29-tool read-only MCP JSON-RPC stdio server (8 legacy + 21 guap-mcp browser tools)"
+    "29-tool MCP JSON-RPC stdio server with ReadOnlyOnly default policy gate (8 legacy + 21 guap-mcp browser tools)"
   ],
   "mcp_tools_count": 29,
   "tools": [
@@ -45,8 +45,8 @@
     },
     {
       "id": "chrome2rust_cache_extract",
-      "readOnly": true,
-      "summary": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation."
+      "readOnly": false,
+      "summary": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation. Writes to disk; requires --allow-mutating and confirm_destructive=true."
     },
     {
       "id": "chrome2rust_analyze",
@@ -55,8 +55,8 @@
     },
     {
       "id": "chrome2rust_report",
-      "readOnly": true,
-      "summary": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory."
+      "readOnly": false,
+      "summary": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory. Writes to disk; requires --allow-mutating and confirm_destructive=true."
     },
     {
       "id": "chrome2rust_custody",

@@ -217,6 +217,10 @@ pub struct McpArgs {
     /// Print MCP tools manifest in JSON Schema format and exit
     #[arg(long)]
     pub tools: bool,
+
+    /// Permit disk-writing tools (cache_extract, report, custody output_manifest, carve extract_dir) with confirm_destructive=true
+    #[arg(long)]
+    pub allow_mutating: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1382,7 +1386,12 @@ fn cmd_mcp(args: McpArgs) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&tools)?);
         return Ok(());
     }
-    chrome2rust_mcp::run_stdio_server().map_err(|e| anyhow!(e.to_string()))
+    let policy = if args.allow_mutating {
+        chrome2rust_mcp::PolicyMode::AllowMutating
+    } else {
+        chrome2rust_mcp::PolicyMode::ReadOnlyOnly
+    };
+    chrome2rust_mcp::run_stdio_server_with_policy(policy).map_err(|e| anyhow!(e.to_string()))
 }
 
 fn print_analysis_summary(report: &UserDataReport) {

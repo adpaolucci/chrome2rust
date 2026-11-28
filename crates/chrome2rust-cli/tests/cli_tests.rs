@@ -627,4 +627,74 @@ fn test_cli_m2a_21_tools_help_exports_and_mcp_jsonrpc() {
     let mcp_stdout = String::from_utf8_lossy(&mcp_out.stdout);
     assert!(mcp_stdout.contains("2024-11-05"));
     assert!(mcp_stdout.contains("cli test query"));
+
+    // Verify `chrome2rust mcp` denies disk-writing tools with -32003 by default and honors `--allow-mutating`
+    let blocked_rep = root.join("mcp_blocked_report.json");
+    let mut ro_child = bin()
+        .arg("mcp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = ro_child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "chrome2rust_report",
+                    "arguments": {
+                        "path": root.to_string_lossy(),
+                        "output": blocked_rep.to_string_lossy(),
+                        "format": "json",
+                        "confirm_destructive": true
+                    }
+                }
+            })
+        )
+        .unwrap();
+    }
+    let ro_out = ro_child.wait_with_output().unwrap();
+    assert!(ro_out.status.success());
+    let ro_resp: serde_json::Value = serde_json::from_slice(&ro_out.stdout).unwrap();
+    assert_eq!(ro_resp["error"]["code"], -32003);
+    assert!(!blocked_rep.exists());
+
+    let mut rw_child = bin()
+        .args(["mcp", "--allow-mutating"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = rw_child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "chrome2rust_report",
+                    "arguments": {
+                        "path": root.to_string_lossy(),
+                        "output": blocked_rep.to_string_lossy(),
+                        "format": "json",
+                        "dry_run": true
+                    }
+                }
+            })
+        )
+        .unwrap();
+    }
+    let rw_out = rw_child.wait_with_output().unwrap();
+    assert!(rw_out.status.success());
+    let rw_resp: serde_json::Value = serde_json::from_slice(&rw_out.stdout).unwrap();
+    assert_eq!(rw_resp["result"]["isError"], false);
+    assert!(!blocked_rep.exists());
 }

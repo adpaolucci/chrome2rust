@@ -18,7 +18,8 @@ use chrome2rust_forensics::unified::{
 };
 use chrome2rust_forensics::{AnalysisOptions, analyze_user_data};
 use chrome2rust_report::{ReportFormat, write_report};
-use guap_mcp::{ActionCommand, ActionRiskLevel, McpServerRegistry, McpToolError, PolicyMode};
+pub use guap_mcp::PolicyMode;
+use guap_mcp::{ActionCommand, ActionRiskLevel, McpServerRegistry, McpToolError};
 use guap_table::{FilterExpr, GuapQuery, SortDirection, TableData, TableProvider, TableQuery, TableSchema};
 use serde_json::{Map, Value, json};
 use std::io::{BufRead, Write};
@@ -126,7 +127,17 @@ impl ActionCommand for BrowserTableAction {
         if self.tool_id == "chrome2rust_carve_images" || self.tool_id == "chrome2rust_carve_video" {
             props.insert(
                 "extract_dir".to_string(),
-                json!({ "type": "string", "description": "Optional output directory to write carved media files" }),
+                json!({
+                    "type": "string",
+                    "description": "Optional output directory to write carved media files (requires --allow-mutating and confirm_destructive=true)"
+                }),
+            );
+            props.insert(
+                "confirm_destructive".to_string(),
+                json!({
+                    "type": "boolean",
+                    "description": "Must be true when extract_dir is set under AllowMutating policy"
+                }),
             );
         }
         if self.tool_id == "chrome2rust_carve_images" {
@@ -143,7 +154,7 @@ impl ActionCommand for BrowserTableAction {
         })
     }
 
-    fn execute(&self, args: &Value, _dry_run: bool) -> Result<Value, McpToolError> {
+    fn execute(&self, args: &Value, dry_run: bool) -> Result<Value, McpToolError> {
         let target_path = args
             .get("path")
             .and_then(Value::as_str)
@@ -159,6 +170,7 @@ impl ActionCommand for BrowserTableAction {
             _ => None,
         };
 
+        let mut dry_run_planned_extract_dir: Option<String> = None;
         let provider: Arc<dyn TableProvider> = match self.tool_id {
             "chrome2rust_unified_history" => Arc::new(UnifiedHistoryTableProvider::with_options(UnifiedQueryOptions {
                 paths: target_path.into_iter().collect(),
@@ -207,24 +219,8 @@ impl ActionCommand for BrowserTableAction {
                 ))
             }
             "chrome2rust_carve_images" => {
-                let extract_dir = match args.get("extract_dir") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(s)) if s.trim().is_empty() => None,
-                    Some(Value::String(s)) => {
-                        if self.policy == PolicyMode::ReadOnlyOnly {
-                            return Err(McpToolError::PolicyDenied(
-                                "extract_dir writes carved files to disk and is denied under PolicyMode::ReadOnlyOnly"
-                                    .into(),
-                            ));
-                        }
-                        Some(PathBuf::from(s))
-                    }
-                    Some(_) => {
-                        return Err(McpToolError::InvalidParams(
-                            "'extract_dir' must be a string path".into(),
-                        ));
-                    }
-                };
+                let (extract_dir, planned_dir) = resolve_carve_extract_dir(self.policy, args, dry_run)?;
+                dry_run_planned_extract_dir = planned_dir;
                 let min_size = args
                     .get("min_size")
                     .and_then(Value::as_u64)
@@ -236,24 +232,8 @@ impl ActionCommand for BrowserTableAction {
                 ))
             }
             "chrome2rust_carve_video" => {
-                let extract_dir = match args.get("extract_dir") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(s)) if s.trim().is_empty() => None,
-                    Some(Value::String(s)) => {
-                        if self.policy == PolicyMode::ReadOnlyOnly {
-                            return Err(McpToolError::PolicyDenied(
-                                "extract_dir writes carved files to disk and is denied under PolicyMode::ReadOnlyOnly"
-                                    .into(),
-                            ));
-                        }
-                        Some(PathBuf::from(s))
-                    }
-                    Some(_) => {
-                        return Err(McpToolError::InvalidParams(
-                            "'extract_dir' must be a string path".into(),
-                        ));
-                    }
-                };
+                let (extract_dir, planned_dir) = resolve_carve_extract_dir(self.policy, args, dry_run)?;
+                dry_run_planned_extract_dir = planned_dir;
                 Arc::new(VideoCarveTableProvider::with_options(
                     target_path.into_iter().collect(),
                     extract_dir,
@@ -265,7 +245,56 @@ impl ActionCommand for BrowserTableAction {
 
         let query = parse_mcp_table_query(&self.schema, args)?;
         let data = provider.query(&query)?;
-        Ok(serialize_table_data(&data))
+        let mut payload = serialize_table_data(&data);
+        if let (Some(planned_dir), Some(obj)) = (dry_run_planned_extract_dir, payload.as_object_mut()) {
+            obj.insert("dry_run".to_string(), Value::Bool(true));
+            obj.insert("applied".to_string(), Value::Bool(false));
+            obj.insert("planned_extract_dir".to_string(), Value::String(planned_dir));
+        }
+        Ok(payload)
+    }
+}
+
+fn resolve_carve_extract_dir(
+    policy: PolicyMode,
+    args: &Value,
+    dry_run: bool,
+) -> Result<(Option<PathBuf>, Option<String>), McpToolError> {
+    match args.get("extract_dir") {
+        None | Some(Value::Null) => Ok((None, None)),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok((None, None)),
+        Some(Value::String(s)) => match policy {
+            PolicyMode::ReadOnlyOnly => Err(McpToolError::PolicyDenied(
+                "extract_dir writes carved files to disk and is denied under ReadOnlyOnly policy".into(),
+            )),
+            PolicyMode::DryRunOnly => {
+                if dry_run {
+                    Ok((None, Some(s.clone())))
+                } else {
+                    Err(McpToolError::PolicyDenied(
+                        "extract_dir requires dry_run=true under DryRunOnly policy".into(),
+                    ))
+                }
+            }
+            PolicyMode::AllowMutating => {
+                if dry_run {
+                    return Ok((None, Some(s.clone())));
+                }
+                if !args
+                    .get("confirm_destructive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return Err(McpToolError::PolicyDenied(
+                        "extract_dir requires confirm_destructive=true under AllowMutating policy".into(),
+                    ));
+                }
+                Ok((Some(PathBuf::from(s)), None))
+            }
+        },
+        Some(_) => Err(McpToolError::InvalidParams(
+            "'extract_dir' must be a string path".into(),
+        )),
     }
 }
 
@@ -399,16 +428,21 @@ fn serialize_table_data(data: &TableData) -> Value {
     })
 }
 
-/// Builds the `guap-mcp` server registry containing all 21 read-only browser tools.
+/// Builds the `guap-mcp` server registry containing all 21 browser tools under `PolicyMode::ReadOnlyOnly`.
 pub fn build_guap_registry(default_path: Option<&Path>) -> McpServerRegistry {
-    let mut registry = McpServerRegistry::new(PolicyMode::ReadOnlyOnly).with_server_info(SERVER_NAME, SERVER_VERSION);
+    build_guap_registry_with_policy(default_path, PolicyMode::ReadOnlyOnly)
+}
+
+/// Builds the `guap-mcp` server registry containing all 21 browser tools under an explicit `PolicyMode`.
+pub fn build_guap_registry_with_policy(default_path: Option<&Path>, policy: PolicyMode) -> McpServerRegistry {
+    let mut registry = McpServerRegistry::new(policy).with_server_info(SERVER_NAME, SERVER_VERSION);
     for provider in build_browser_tool_providers(default_path) {
         registry.register_action(Arc::new(BrowserTableAction {
             tool_id: provider.tool_id(),
             description: provider.description(),
             schema: provider.schema(),
             default_path: default_path.map(|p| p.to_path_buf()),
-            policy: PolicyMode::ReadOnlyOnly,
+            policy,
         }));
     }
     registry
@@ -471,8 +505,8 @@ pub fn get_legacy_tools_manifest() -> Value {
         },
         {
             "name": "chrome2rust_cache_extract",
-            "description": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation.",
-            "annotations": { "readOnlyHint": true, "destructiveHint": false },
+            "description": "Extract cached payloads from Chrome cache into an output directory with decompression, extension recovery, and timestamp preservation. Writes to disk; requires --allow-mutating and confirm_destructive=true.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -481,7 +515,9 @@ pub fn get_legacy_tools_manifest() -> Value {
                     "url": { "type": "string", "description": "Optional URL substring filter" },
                     "content_type": { "type": "string", "description": "Optional Content-Type substring filter" },
                     "website_dirs": { "type": "boolean", "description": "Reconstruct host/path directory tree" },
-                    "prefer_detected_ext": { "type": "boolean", "description": "Replace existing mismatched extension with payload-detected extension" }
+                    "prefer_detected_ext": { "type": "boolean", "description": "Replace existing mismatched extension with payload-detected extension" },
+                    "dry_run": { "type": "boolean", "description": "Preview extraction plan without writing files" },
+                    "confirm_destructive": { "type": "boolean", "description": "Must be true to write extracted files under AllowMutating policy" }
                 },
                 "required": ["path", "output_dir"]
             }
@@ -502,15 +538,17 @@ pub fn get_legacy_tools_manifest() -> Value {
         },
         {
             "name": "chrome2rust_report",
-            "description": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory.",
-            "annotations": { "readOnlyHint": true, "destructiveHint": false },
+            "description": "Generate standalone HTML, JSON, Markdown, or bundled forensic reports from a Chrome User Data directory. Writes to disk; requires --allow-mutating and confirm_destructive=true.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path to Chrome User Data or Profile folder" },
                     "output": { "type": "string", "description": "Output file path or folder when format is 'all'" },
                     "format": { "type": "string", "description": "Report format: html, json, markdown, or all" },
-                    "decrypt": { "type": "boolean", "description": "Enable optional best-effort decryption" }
+                    "decrypt": { "type": "boolean", "description": "Enable optional best-effort decryption" },
+                    "dry_run": { "type": "boolean", "description": "Preview report plan without writing files" },
+                    "confirm_destructive": { "type": "boolean", "description": "Must be true to write report files under AllowMutating policy" }
                 },
                 "required": ["path", "output"]
             }
@@ -523,7 +561,9 @@ pub fn get_legacy_tools_manifest() -> Value {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path to Chrome artifact file or User Data folder" },
-                    "output_manifest": { "type": "string", "description": "Optional CSV or JSON output path to persist custody manifest" }
+                    "output_manifest": { "type": "string", "description": "Optional CSV or JSON output path to persist custody manifest (requires --allow-mutating + confirm_destructive=true)" },
+                    "dry_run": { "type": "boolean", "description": "Preview manifest persistence without writing files" },
+                    "confirm_destructive": { "type": "boolean", "description": "Must be true when output_manifest is set under AllowMutating policy" }
                 },
                 "required": ["path"]
             }
@@ -739,7 +779,12 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
         "chrome2rust_custody" => {
             let p_str = args["path"].as_str().ok_or("Missing required string 'path'")?;
             let manifest = generate_custody_manifest(Path::new(p_str)).map_err(|e| e.to_string())?;
-            if let Some(out) = args["output_manifest"].as_str() {
+            if let Some(out) = args
+                .get("output_manifest")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 write_custody_manifest(&manifest, Path::new(out)).map_err(|e| e.to_string())?;
             }
             serde_json::to_value(manifest).map_err(|e| e.to_string())
@@ -748,7 +793,63 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
     }
 }
 
+fn is_legacy_disk_write(tool_name: &str, args: &Value) -> bool {
+    match tool_name {
+        "chrome2rust_cache_extract" | "chrome2rust_report" => true,
+        "chrome2rust_custody" => args
+            .get("output_manifest")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
+}
+
+fn enforce_legacy_policy(tool_name: &str, args: &Value, policy: PolicyMode) -> Result<(), Value> {
+    if !is_legacy_disk_write(tool_name, args) {
+        return Ok(());
+    }
+    let dry_run = args.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+    match policy {
+        PolicyMode::ReadOnlyOnly => Err(json!({
+            "code": -32003,
+            "message": format!("SAFETY REFUSAL: tool '{tool_name}' writes files to disk and is blocked under ReadOnlyOnly policy")
+        })),
+        PolicyMode::DryRunOnly => {
+            if dry_run {
+                Ok(())
+            } else {
+                Err(json!({
+                    "code": -32003,
+                    "message": format!("SAFETY REFUSAL: tool '{tool_name}' requires dry_run=true under DryRunOnly policy")
+                }))
+            }
+        }
+        PolicyMode::AllowMutating => {
+            if dry_run {
+                return Ok(());
+            }
+            if args
+                .get("confirm_destructive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                Ok(())
+            } else {
+                Err(json!({
+                    "code": -32003,
+                    "message": format!("SAFETY REFUSAL: tool '{tool_name}' requires confirm_destructive=true under AllowMutating policy")
+                }))
+            }
+        }
+    }
+}
+
 pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
+    handle_jsonrpc_request_with_policy(req, PolicyMode::ReadOnlyOnly)
+}
+
+pub fn handle_jsonrpc_request_with_policy(req: &Value, policy: PolicyMode) -> Option<Value> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     debug!(method, "Received MCP JSON-RPC request");
@@ -824,8 +925,32 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
                     });
                 }
                 let default_args = json!({});
-                let args = raw_args.unwrap_or(&default_args);
-                let (text, is_err) = match call_tool(tool_name, args) {
+                let args = raw_args.filter(|a| a.is_object()).unwrap_or(&default_args);
+                if let Err(err_obj) = enforce_legacy_policy(tool_name, args, policy) {
+                    return id.map(|req_id| {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": err_obj
+                        })
+                    });
+                }
+                let dry_run = args.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+                let call_res = if dry_run && is_legacy_disk_write(tool_name, args) {
+                    let mut preview_args = args.clone();
+                    if let Some(obj) = preview_args.as_object_mut() {
+                        obj.remove("confirm_destructive");
+                    }
+                    Ok(json!({
+                        "dry_run": true,
+                        "tool": tool_name,
+                        "applied": false,
+                        "arguments": preview_args
+                    }))
+                } else {
+                    call_tool(tool_name, args)
+                };
+                let (text, is_err) = match call_res {
                     Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_default(), false),
                     Err(msg) => (msg, true),
                 };
@@ -838,7 +963,7 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
                     }
                 }))
             } else {
-                build_guap_registry(None).handle_jsonrpc_request(req)
+                build_guap_registry_with_policy(None, policy).handle_jsonrpc_request(req)
             }
         }
         _ => id.map(|req_id| {
@@ -855,9 +980,14 @@ pub fn handle_jsonrpc_request(req: &Value) -> Option<Value> {
 }
 
 pub fn run_stdio_server() -> Result<(), Box<dyn std::error::Error>> {
+    run_stdio_server_with_policy(PolicyMode::ReadOnlyOnly)
+}
+
+pub fn run_stdio_server_with_policy(policy: PolicyMode) -> Result<(), Box<dyn std::error::Error>> {
     info!(
         server = SERVER_NAME,
         version = SERVER_VERSION,
+        ?policy,
         "Starting chrome2rust MCP stdio server"
     );
     let stdin = std::io::stdin();
@@ -877,7 +1007,7 @@ pub fn run_stdio_server() -> Result<(), Box<dyn std::error::Error>> {
         }
         match serde_json::from_str::<Value>(trimmed) {
             Ok(req) => {
-                if let Some(resp) = handle_jsonrpc_request(&req) {
+                if let Some(resp) = handle_jsonrpc_request_with_policy(&req, policy) {
                     let out = serde_json::to_string(&resp)?;
                     writeln!(stdout, "{out}")?;
                     stdout.flush()?;
@@ -1007,7 +1137,12 @@ mod tests {
         assert!(!arr.iter().any(|t| t["name"] == "chrome2rust_cache_delete"));
 
         for t in arr {
-            assert_eq!(t["annotations"]["readOnlyHint"], true);
+            let name = t["name"].as_str().unwrap_or("");
+            let expected_ro = !matches!(name, "chrome2rust_cache_extract" | "chrome2rust_report");
+            assert_eq!(
+                t["annotations"]["readOnlyHint"], expected_ro,
+                "unexpected readOnlyHint on {name}"
+            );
             assert_eq!(t["annotations"]["destructiveHint"], false);
         }
 
@@ -1110,6 +1245,10 @@ mod tests {
 
         // B.2: extract_dir must be denied under PolicyMode::ReadOnlyOnly (-32003) and never write to disk
         for carve_tool in ["chrome2rust_carve_images", "chrome2rust_carve_video"] {
+            let schema = arr.iter().find(|t| t["name"] == carve_tool).unwrap();
+            assert!(schema["inputSchema"]["properties"]["confirm_destructive"].is_object());
+            assert!(schema["inputSchema"]["properties"]["dry_run"].is_object());
+
             let blocked_dir = dir.path().join(format!("blocked_{carve_tool}"));
             let resp = handle_jsonrpc_request(&json!({
                 "jsonrpc": "2.0",
@@ -1119,7 +1258,8 @@ mod tests {
                     "name": carve_tool,
                     "arguments": {
                         "path": dir.path().to_string_lossy(),
-                        "extract_dir": blocked_dir.to_string_lossy()
+                        "extract_dir": blocked_dir.to_string_lossy(),
+                        "confirm_destructive": true
                     }
                 }
             }))
@@ -1129,6 +1269,76 @@ mod tests {
                 "expected PolicyDenied for {carve_tool}: {resp}"
             );
             assert!(!blocked_dir.exists());
+
+            // AllowMutating without confirm_destructive=true still denies with -32003
+            let nc_resp = handle_jsonrpc_request_with_policy(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 51,
+                    "method": "tools/call",
+                    "params": {
+                        "name": carve_tool,
+                        "arguments": {
+                            "path": dir.path().to_string_lossy(),
+                            "extract_dir": blocked_dir.to_string_lossy()
+                        }
+                    }
+                }),
+                PolicyMode::AllowMutating,
+            )
+            .unwrap();
+            assert_eq!(nc_resp["error"]["code"], -32003);
+            assert!(!blocked_dir.exists());
+
+            // DryRunOnly without dry_run=true denies (-32003); with dry_run=true previews without writing
+            let dry_denied = handle_jsonrpc_request_with_policy(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 52,
+                    "method": "tools/call",
+                    "params": {
+                        "name": carve_tool,
+                        "arguments": {
+                            "path": dir.path().to_string_lossy(),
+                            "extract_dir": blocked_dir.to_string_lossy(),
+                            "confirm_destructive": true
+                        }
+                    }
+                }),
+                PolicyMode::DryRunOnly,
+            )
+            .unwrap();
+            assert_eq!(dry_denied["error"]["code"], -32003);
+            assert!(!blocked_dir.exists());
+
+            for policy in [PolicyMode::DryRunOnly, PolicyMode::AllowMutating] {
+                let dry_ok = handle_jsonrpc_request_with_policy(
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": 53,
+                        "method": "tools/call",
+                        "params": {
+                            "name": carve_tool,
+                            "arguments": {
+                                "path": dir.path().to_string_lossy(),
+                                "extract_dir": blocked_dir.to_string_lossy(),
+                                "dry_run": true
+                            }
+                        }
+                    }),
+                    policy,
+                )
+                .unwrap();
+                assert_eq!(
+                    dry_ok["result"]["isError"], false,
+                    "dry_run failed for {carve_tool}: {dry_ok}"
+                );
+                let preview: Value =
+                    serde_json::from_str(dry_ok["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+                assert_eq!(preview["dry_run"], true);
+                assert_eq!(preview["applied"], false);
+                assert!(!blocked_dir.exists());
+            }
 
             // Without extract_dir, read-only invocation succeeds
             let ok_resp = handle_jsonrpc_request(&json!({
@@ -1143,5 +1353,139 @@ mod tests {
             .unwrap();
             assert_eq!(ok_resp["result"]["isError"], false);
         }
+
+        // Legacy disk-writing tools must also be denied under ReadOnlyOnly (-32003) and never write to disk
+        let blocked_extract = dir.path().join("blocked_legacy_extract");
+        let blocked_report = dir.path().join("blocked_legacy_report.json");
+        let blocked_custody = dir.path().join("blocked_custody.json");
+        for (name, args) in [
+            (
+                "chrome2rust_cache_extract",
+                json!({ "path": dir.path().to_string_lossy(), "output_dir": blocked_extract.to_string_lossy(), "confirm_destructive": true }),
+            ),
+            (
+                "chrome2rust_report",
+                json!({ "path": dir.path().to_string_lossy(), "output": blocked_report.to_string_lossy(), "format": "json", "confirm_destructive": true }),
+            ),
+            (
+                "chrome2rust_custody",
+                json!({ "path": dir.path().to_string_lossy(), "output_manifest": blocked_custody.to_string_lossy(), "confirm_destructive": true }),
+            ),
+        ] {
+            let resp = handle_jsonrpc_request(&json!({
+                "jsonrpc": "2.0",
+                "id": 70,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": args }
+            }))
+            .unwrap();
+            assert_eq!(resp["error"]["code"], -32003, "expected -32003 for {name}: {resp}");
+
+            // Under AllowMutating without confirm_destructive, still -32003
+            let mut no_confirm = args.clone();
+            no_confirm.as_object_mut().unwrap().remove("confirm_destructive");
+            let nc_resp = handle_jsonrpc_request_with_policy(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 73,
+                    "method": "tools/call",
+                    "params": { "name": name, "arguments": no_confirm }
+                }),
+                PolicyMode::AllowMutating,
+            )
+            .unwrap();
+            assert_eq!(
+                nc_resp["error"]["code"], -32003,
+                "expected -32003 without confirm for {name}"
+            );
+
+            // Under DryRunOnly & AllowMutating with dry_run=true, preview succeeds without writing and strips confirm_destructive
+            let mut dry_args = args.clone();
+            dry_args.as_object_mut().unwrap().insert("dry_run".into(), json!(true));
+            for policy in [PolicyMode::DryRunOnly, PolicyMode::AllowMutating] {
+                let dry_resp = handle_jsonrpc_request_with_policy(
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": 74,
+                        "method": "tools/call",
+                        "params": { "name": name, "arguments": dry_args }
+                    }),
+                    policy,
+                )
+                .unwrap();
+                assert_eq!(dry_resp["result"]["isError"], false);
+                let payload: Value =
+                    serde_json::from_str(dry_resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+                assert_eq!(payload["dry_run"], true);
+                assert_eq!(payload["applied"], false);
+                assert!(payload["arguments"].get("confirm_destructive").is_none());
+            }
+        }
+        assert!(!blocked_extract.exists());
+        assert!(!blocked_report.exists());
+        assert!(!blocked_custody.exists());
+
+        // chrome2rust_custody without output_manifest (or whitespace-only) remains read-only under ReadOnlyOnly
+        for (req_id, args) in [
+            (71, json!({ "path": dir.path().to_string_lossy() })),
+            (
+                75,
+                json!({ "path": dir.path().to_string_lossy(), "output_manifest": "   " }),
+            ),
+        ] {
+            let ro_custody = handle_jsonrpc_request(&json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "tools/call",
+                "params": {
+                    "name": "chrome2rust_custody",
+                    "arguments": args
+                }
+            }))
+            .unwrap();
+            assert_eq!(ro_custody["result"]["isError"], false);
+        }
+
+        // Under AllowMutating + confirm_destructive=true, custody manifest & report writes succeed
+        let ok_custody = handle_jsonrpc_request_with_policy(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 72,
+                "method": "tools/call",
+                "params": {
+                    "name": "chrome2rust_custody",
+                    "arguments": {
+                        "path": dir.path().to_string_lossy(),
+                        "output_manifest": blocked_custody.to_string_lossy(),
+                        "confirm_destructive": true
+                    }
+                }
+            }),
+            PolicyMode::AllowMutating,
+        )
+        .unwrap();
+        assert_eq!(ok_custody["result"]["isError"], false);
+        assert!(blocked_custody.is_file());
+
+        let ok_report = handle_jsonrpc_request_with_policy(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 76,
+                "method": "tools/call",
+                "params": {
+                    "name": "chrome2rust_report",
+                    "arguments": {
+                        "path": dir.path().to_string_lossy(),
+                        "output": blocked_report.to_string_lossy(),
+                        "format": "json",
+                        "confirm_destructive": true
+                    }
+                }
+            }),
+            PolicyMode::AllowMutating,
+        )
+        .unwrap();
+        assert_eq!(ok_report["result"]["isError"], false);
+        assert!(blocked_report.is_file());
     }
 }

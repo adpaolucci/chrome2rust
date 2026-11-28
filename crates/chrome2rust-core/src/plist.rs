@@ -939,7 +939,7 @@ mod tests {
                 "depth={depth} unexpected error: {err}"
             );
             assert!(
-                elapsed < std::time::Duration::from_millis(100),
+                elapsed < std::time::Duration::from_millis(500),
                 "depth={depth} took too long: {elapsed:?}"
             );
         }

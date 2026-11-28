@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use chrome2rust_mcp::{SERVER_NAME, SERVER_VERSION, get_tools_manifest, run_stdio_server};
+use chrome2rust_mcp::{PolicyMode, SERVER_NAME, SERVER_VERSION, get_tools_manifest, run_stdio_server_with_policy};
 use clap::Parser;
 use std::process;
 use tracing_subscriber::EnvFilter;
@@ -15,6 +15,10 @@ struct Args {
     /// Print available tools in JSON schema format and exit
     #[arg(long)]
     tools: bool,
+
+    /// Permit disk-writing tools (cache_extract, report, custody output_manifest, carve extract_dir) with confirm_destructive=true
+    #[arg(long)]
+    allow_mutating: bool,
 
     /// Log level filter (sent to stderr)
     #[arg(long, default_value = "warn")]
@@ -36,7 +40,12 @@ fn main() {
         .with_env_filter(filter)
         .init();
 
-    if let Err(e) = run_stdio_server() {
+    let policy = if args.allow_mutating {
+        PolicyMode::AllowMutating
+    } else {
+        PolicyMode::ReadOnlyOnly
+    };
+    if let Err(e) = run_stdio_server_with_policy(policy) {
         eprintln!("[chrome2rust-mcp error] Server exited: {e}");
         process::exit(1);
     }
